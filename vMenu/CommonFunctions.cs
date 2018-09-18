@@ -593,7 +593,7 @@ namespace vMenuClient
             if (vehicleName == "custom")
             {
                 // Get the result.
-                string result = await GetUserInput("Enter Vehicle Name", "Adder");
+                string result = await GetUserInput("Enter Vehicle Name", "");
                 // If the result was not invalid.
                 if (result != "NULL")
                 {
@@ -642,7 +642,7 @@ namespace vMenuClient
 
             var vehClass = GetVehicleClassFromName(vehicleHash);
             int modelClass = GetVehicleClassFromName(vehicleHash);
-            if (!MainMenu.VehicleSpawnerMenu.allowedCategories[modelClass])
+            if (!VehicleSpawner.allowedCategories[modelClass])
             {
                 Notify.Alert("You are not allowed to spawn this vehicle, because it belongs to a category which is restricted by the server owner.");
                 return;
@@ -798,7 +798,12 @@ namespace vMenuClient
 
             // Set the previous vehicle to the new vehicle.
             previousVehicle = vehicle;
-            vehicle.Speed = speed;
+            //vehicle.Speed = speed; // retarded feature that randomly breaks for no fucking reason
+            if (!vehicle.Model.IsTrain) // to be extra fucking safe
+            {
+                // workaround of retarded feature above:
+                SetVehicleForwardSpeed(vehicle.Handle, speed);
+            }
             vehicle.CurrentRPM = rpm;
 
             // Discard the model.
@@ -2030,7 +2035,6 @@ namespace vMenuClient
         /// <returns></returns>
         public UIMenu GetOpenMenu()
         {
-            UIMenu output = null;
             if (MainMenu.Mp.IsAnyMenuOpen())
             {
                 foreach (UIMenu m in MainMenu.Mp.ToList())
@@ -2041,7 +2045,7 @@ namespace vMenuClient
                     }
                 }
             }
-            return output;
+            return null;
 
         }
         #endregion
@@ -2328,6 +2332,26 @@ namespace vMenuClient
         }
         #endregion
 
+        #endregion
+
+        #region Set Correct Blip
+        public void SetCorrectBlipSprite(int ped, int blip)
+        {
+            if (IsPedInAnyVehicle(ped, false))
+            {
+                int vehicle = GetVehiclePedIsIn(ped, false);
+                int blipSprite = BlipInfo.GetBlipSpriteForVehicle(vehicle);
+                if (GetBlipSprite(blip) != blipSprite)
+                {
+                    SetBlipSprite(blip, blipSprite);
+                }
+                
+            }
+            else
+            {
+                SetBlipSprite(blip, 1);
+            }
+        }
         #endregion
     }
 }

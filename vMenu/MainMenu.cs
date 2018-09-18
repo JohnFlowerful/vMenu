@@ -57,6 +57,7 @@ namespace vMenuClient
         public static Dictionary<string, string> MenuOptions { get; private set; }
 
         public static bool DisableControls { get; set; } = false;
+        private UIMenu currentMenu = null;
         #endregion
 
         /// <summary>
@@ -127,6 +128,31 @@ namespace vMenuClient
             Cf.Log(JsonConvert.SerializeObject(PermissionsManager.Permissions).ToString());
 
             permissionsSetupDone = true;
+            VehicleSpawner.allowedCategories = new List<bool>()
+            {
+                Cf.IsAllowed(Permission.VSCompacts),
+                Cf.IsAllowed(Permission.VSSedans),
+                Cf.IsAllowed(Permission.VSSUVs),
+                Cf.IsAllowed(Permission.VSCoupes),
+                Cf.IsAllowed(Permission.VSMuscle),
+                Cf.IsAllowed(Permission.VSSportsClassic),
+                Cf.IsAllowed(Permission.VSSports),
+                Cf.IsAllowed(Permission.VSSuper),
+                Cf.IsAllowed(Permission.VSMotorcycles),
+                Cf.IsAllowed(Permission.VSOffRoad),
+                Cf.IsAllowed(Permission.VSIndustrial),
+                Cf.IsAllowed(Permission.VSUtility),
+                Cf.IsAllowed(Permission.VSVans),
+                Cf.IsAllowed(Permission.VSCycles),
+                Cf.IsAllowed(Permission.VSBoats),
+                Cf.IsAllowed(Permission.VSHelicopters),
+                Cf.IsAllowed(Permission.VSPlanes),
+                Cf.IsAllowed(Permission.VSService),
+                Cf.IsAllowed(Permission.VSEmergency),
+                Cf.IsAllowed(Permission.VSMilitary),
+                Cf.IsAllowed(Permission.VSCommercial),
+                Cf.IsAllowed(Permission.VSTrains),
+            };
         }
         #endregion
 
@@ -164,32 +190,36 @@ namespace vMenuClient
         /// <returns></returns>
         private async Task ProcessMainButtons()
         {
-            UIMenu currentMenu = Cf.GetOpenMenu();
-            if (currentMenu != null && !DontOpenMenus && Mp.IsAnyMenuOpen() && !NoClipEnabled)
+            if (Mp.IsAnyMenuOpen())
             {
-                if (currentMenu.Visible && !DisableControls)
+                currentMenu = Cf.GetOpenMenu();
+                if (currentMenu != null && !DontOpenMenus && Mp.IsAnyMenuOpen() && !NoClipEnabled)
                 {
-                    // Select / Enter
-                    if (Game.IsDisabledControlJustReleased(0, Control.FrontendAccept) || Game.IsControlJustReleased(0, Control.FrontendAccept))
+                    if (currentMenu.Visible && !DisableControls)
                     {
-                        if (currentMenu.MenuItems.Count() > 0)
+                        // Select / Enter
+                        if (Game.IsDisabledControlJustReleased(0, Control.FrontendAccept) || Game.IsControlJustReleased(0, Control.FrontendAccept))
                         {
-                            currentMenu.SelectItem();
+                            if (currentMenu.MenuItems.Count() > 0)
+                            {
+                                currentMenu.SelectItem();
+                            }
+                        }
+                        // Cancel / Go Back
+                        else if (Game.IsDisabledControlJustReleased(0, Control.PhoneCancel))
+                        {
+                            // Wait for the next frame to make sure the "cinematic camera" button doesn't get "re-enabled" before the menu gets closed.
+                            await Delay(0);
+                            currentMenu.GoBack();
                         }
                     }
-                    // Cancel / Go Back
-                    else if (Game.IsDisabledControlJustReleased(0, Control.PhoneCancel))
-                    {
-                        // Wait for the next frame to make sure the "cinematic camera" button doesn't get "re-enabled" before the menu gets closed.
-                        await Delay(0);
-                        currentMenu.GoBack();
-                    }
+                }
+                else
+                {
+                    await Delay(0);
                 }
             }
-            else
-            {
-                await Delay(0);
-            }
+
         }
 
         /// <summary>
@@ -350,7 +380,7 @@ namespace vMenuClient
 
                 // Request the permissions data from the server.
                 TriggerServerEvent("vMenu:RequestPermissions", PlayerId());
-                TriggerServerEvent("vMenu:RequestBanList", PlayerId());
+                //TriggerServerEvent("vMenu:RequestBanList", PlayerId());
 
                 // Wait until the data is received and the player's name is loaded correctly.
                 while (!permissionsSetupDone || !optionsSetupDone
@@ -379,6 +409,7 @@ namespace vMenuClient
                 CreateSubmenus();
             }
             #endregion
+
 
             // If the setup (permissions) is done, and it's not the first tick, then do this:
             if (permissionsSetupDone && optionsSetupDone && !firstTick)
@@ -578,7 +609,7 @@ namespace vMenuClient
             }
             if (Cf.IsAllowed(Permission.OPUnban))
             {
-                TriggerServerEvent("vMenu:RequestBanList", PlayerId());
+                //TriggerServerEvent("vMenu:RequestBanList", PlayerId());
                 BannedPlayersMenu = new BannedPlayers();
                 UIMenu menu = BannedPlayersMenu.GetMenu();
                 UIMenuItem button = new UIMenuItem("Banned Players", "View and manage all banned players in this menu.");
@@ -678,19 +709,6 @@ namespace vMenuClient
                 AddMenu(menu, button);
             }
 
-            // Add misc settings menu.
-            //if (Cf.IsAllowed(Permission.MSMenu))
-            // removed the permissions check, because the misc menu should've never been restricted in the first place.
-            // not sure why I even added this before... saving of preferences and similar functions should always be allowed.
-            // no matter what.
-            {
-                MiscSettingsMenu = new MiscSettings();
-                UIMenu menu = MiscSettingsMenu.GetMenu();
-                UIMenuItem button = new UIMenuItem("Misc Settings", "Change general settings.");
-                button.SetRightLabel("→→→");
-                AddMenu(menu, button);
-            }
-
             // Add Voice Chat Menu.
             if (Cf.IsAllowed(Permission.VCMenu))
             {
@@ -701,10 +719,25 @@ namespace vMenuClient
                 AddMenu(menu, button);
             }
 
+            // Add misc settings menu.
+            //if (Cf.IsAllowed(Permission.MSMenu))
+            // removed the permissions check, because the misc menu should've never been restricted in the first place.
+            // not sure why I even added this before... saving of preferences and similar functions should always be allowed.
+            // no matter what.
+            {
+                MiscSettingsMenu = new MiscSettings();
+                UIMenu menu = MiscSettingsMenu.GetMenu();
+                UIMenuItem button = new UIMenuItem("Misc Settings", "Miscellaneous vMenu options/settings can be configured here. You can also save your settings in this menu.");
+                button.SetRightLabel("→→→");
+                AddMenu(menu, button);
+            }
+
+
+
             // Add About Menu.
             AboutMenu = new About();
             UIMenu sub = AboutMenu.GetMenu();
-            UIMenuItem btn = new UIMenuItem("About vMenu", "Information about this menu and it's creators.");
+            UIMenuItem btn = new UIMenuItem("About vMenu", "Information about vMenu.");
             btn.SetRightLabel("→→→");
             AddMenu(sub, btn);
 

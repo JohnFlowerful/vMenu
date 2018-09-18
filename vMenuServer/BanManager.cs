@@ -13,6 +13,8 @@ namespace vMenuServer
 {
     public class BanManager : BaseScript
     {
+        private static bool readingOrWritingToBanFile = false;
+
         /// <summary>
         /// Struct used to store bans.
         /// </summary>
@@ -41,28 +43,36 @@ namespace vMenuServer
             EventHandlers.Add("vMenu:RequestPlayerUnban", new Action<Player, string>(RemoveBanRecord));
             EventHandlers.Add("vMenu:RequestBanList", new Action<Player>(SendBanList));
 
-            BannedPlayersList = GetBanList();
+            //BannedPlayersList = await GetBanList();
         }
 
         /// <summary>
         /// Sends the banlist (as json string) to the client.
         /// </summary>
         /// <param name="source"></param>
-        private void SendBanList([FromSource] Player source)
+        private async void SendBanList([FromSource] Player source)
         {
+            BannedPlayersList = await GetBanList();
             Log("Updating player with new banlist.\n");
-            source.TriggerEvent("vMenu:SetBanList", JsonConvert.SerializeObject(GetBanList()).ToString());
+            string data = JsonConvert.SerializeObject(BannedPlayersList).ToString();
+            //Debug.Write(data + "\n");
+            source.TriggerEvent("vMenu:SetBanList", data);
         }
 
         /// <summary>
         /// Gets the ban list from the bans.json file.
         /// </summary>
         /// <returns></returns>
-        public static List<BanRecord> GetBanList()
+        public static async Task<List<BanRecord>> GetBanList()
         {
+            while (readingOrWritingToBanFile)
+            {
+                await Delay(0);
+            }
+            readingOrWritingToBanFile = true;
             var banList = new List<BanRecord>();
             string bansJson = LoadResourceFile(GetCurrentResourceName(), "bans.json");
-            if (bansJson != null && bansJson != "")
+            if (bansJson != null && bansJson != "" && !string.IsNullOrEmpty(bansJson))
             {
                 dynamic banRecords = JsonConvert.DeserializeObject(bansJson);
                 if (banRecords != null)
@@ -73,6 +83,7 @@ namespace vMenuServer
                     }
                 }
             }
+            readingOrWritingToBanFile = false;
             return banList;
         }
 
@@ -125,8 +136,9 @@ namespace vMenuServer
         /// <param name="source"></param>
         /// <param name="playerName"></param>
         /// <param name="kickCallback"></param>
-        private void CheckForBans([FromSource]Player source, string playerName, CallbackDelegate kickCallback)
+        private async void CheckForBans([FromSource]Player source, string playerName, CallbackDelegate kickCallback)
         {
+            BannedPlayersList = await GetBanList();
             foreach (BanRecord ban in BannedPlayersList)
             {
                 foreach (string identifier in source.Identifiers)
@@ -152,7 +164,7 @@ namespace vMenuServer
                         }
                         else
                         {
-                            if (RemoveBan(ban))
+                            if (await RemoveBan(ban))
                             {
                                 BanLog($"The following ban record has been removed (player unbanned). " +
                                     $"The player has been unbanned because their ban duration expired. [Player: {ban.playerName} " +
@@ -177,7 +189,7 @@ namespace vMenuServer
         /// <param name="source">The player who triggered the event.</param>
         /// <param name="targetPlayer">The player that needs to be banned.</param>
         /// <param name="banReason">The reason why the player is getting banned.</param>
-        private void BanPlayer([FromSource] Player source, int targetPlayer, string banReason)
+        private async void BanPlayer([FromSource] Player source, int targetPlayer, string banReason)
         {
             if (IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.PermBan") || IsPlayerAceAllowed(source.Handle, "vMenu.Everything") || IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.All"))
             {
@@ -194,13 +206,13 @@ namespace vMenuServer
                             identifiers = target.Identifiers.ToList<string>(),
                             playerName = GetSafePlayerName(target.Name)
                         };
-                        if (AddBan(ban))
+                        if (await AddBan(ban))
                         {
                             BanLog($"A new ban record has been added. Player: {ban.playerName} was banned by {ban.bannedBy} " +
                                 $"for {ban.banReason} until {ban.bannedUntil} (forever).");
-                            TriggerEvent("vMenu:BanSuccessful", JsonConvert.SerializeObject(ban).ToString());
-                            BannedPlayersList = GetBanList();
                             target.Drop($"You have been permanently banned from this server. Banned by: {ban.bannedBy}. Ban reason: {ban.banReason}");
+                            TriggerEvent("vMenu:BanSuccessful", JsonConvert.SerializeObject(ban).ToString());
+                            BannedPlayersList = await GetBanList();
                         }
                         else
                         {
@@ -230,7 +242,7 @@ namespace vMenuServer
         /// <param name="targetPlayer">Player who needs to be banned.</param>
         /// <param name="banDurationHours">Ban duration in hours.</param>
         /// <param name="banReason">Reason for the ban.</param>
-        private void BanPlayer([FromSource] Player source, int? targetPlayer, double banDurationHours, string banReason)
+        private async void BanPlayer([FromSource] Player source, int? targetPlayer, double banDurationHours, string banReason)
         {
             if (IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.TempBan") || IsPlayerAceAllowed(source.Handle, "vMenu.Everything") ||
                 IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.All"))
@@ -253,7 +265,7 @@ namespace vMenuServer
                         };
 
                         Log("Record created.");
-                        if (AddBan(ban))
+                        if (await AddBan(ban))
                         {
                             Log("banning was successfull.");
                             BanLog($"A new ban record has been added. Player: {ban.playerName} was banned by " +
@@ -265,7 +277,7 @@ namespace vMenuServer
                         {
                             Log("Saving of new ban failed. Reason: unknown. Maybe the file is broken?");
                         }
-                        BannedPlayersList = GetBanList();
+                        BannedPlayersList = await GetBanList();
                         string timeRemaining = GetRemainingTimeMessage(ban.bannedUntil.Subtract(DateTime.Now));
                         target.Drop($"You are banned from this server. Ban time remaining: {timeRemaining}. Banned by: {ban.bannedBy}. Ban reason: {ban.banReason}");
 
@@ -323,11 +335,11 @@ namespace vMenuServer
         /// </summary>
         /// <param name="ban"></param>
         /// <returns></returns>
-        private static bool AddBan(BanRecord ban)
+        private static async Task<bool> AddBan(BanRecord ban)
         {
 
             Log("Refreshing banned players list.");
-            BannedPlayersList = GetBanList();
+            BannedPlayersList = await GetBanList();
             var found = false;
             foreach (BanRecord b in BannedPlayersList)
             {
@@ -348,8 +360,15 @@ namespace vMenuServer
 
             BannedPlayersList.Add(ban);
 
-            var output = JsonConvert.SerializeObject(BannedPlayersList);
-            return SaveResourceFile(GetCurrentResourceName(), "bans.json", output, output.Length);
+            var output = JsonConvert.SerializeObject(BannedPlayersList, Formatting.Indented);
+            while (readingOrWritingToBanFile)
+            {
+                await Delay(0);
+            }
+            readingOrWritingToBanFile = true;
+            bool successful = SaveResourceFile(GetCurrentResourceName(), "bans.json", output, -1);
+            readingOrWritingToBanFile = false;
+            return successful;
         }
 
         /// <summary>
@@ -357,9 +376,9 @@ namespace vMenuServer
         /// </summary>
         /// <param name="record"></param>
         /// <returns></returns>
-        public static bool RemoveBan(BanRecord record)
+        public static async Task<bool> RemoveBan(BanRecord record)
         {
-            BannedPlayersList = GetBanList();
+            BannedPlayersList = await GetBanList();
             List<int> itemsToRemove = new List<int>();
             foreach (BanRecord ban in BannedPlayersList)
             {
@@ -389,8 +408,15 @@ namespace vMenuServer
                     BannedPlayersList.RemoveAt(i - 1);
                 }
             }
-            var output = JsonConvert.SerializeObject(BannedPlayersList);
-            return SaveResourceFile(GetCurrentResourceName(), "bans.json", output, output.Length);
+            var output = JsonConvert.SerializeObject(BannedPlayersList, Formatting.Indented);
+            while (readingOrWritingToBanFile)
+            {
+                await Delay(0);
+            }
+            readingOrWritingToBanFile = true;
+            bool result = SaveResourceFile(GetCurrentResourceName(), "bans.json", output, -1);
+            readingOrWritingToBanFile = false;
+            return result;
         }
 
         /// <summary>
@@ -398,15 +424,15 @@ namespace vMenuServer
         /// </summary>
         /// <param name="source"></param>
         /// <param name="banRecordJsonString"></param>
-        private void RemoveBanRecord([FromSource]Player source, string banRecordJsonString)
+        private async void RemoveBanRecord([FromSource]Player source, string banRecordJsonString)
         {
             if (source != null && !string.IsNullOrEmpty(source.Name) && source.Name.ToLower() != "**invalid**" && source.Name.ToLower() != "** invalid **")
             {
-                if (IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.Unban"))
+                if (IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.Unban") || IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.All") || IsPlayerAceAllowed(source.Handle, "vMenu.Everything"))
                 {
                     dynamic obj = JsonConvert.DeserializeObject(banRecordJsonString);
                     BanRecord ban = JsonToBanRecord(obj);
-                    if (RemoveBan(ban))
+                    if (await RemoveBan(ban))
                     {
                         BanLog($"The following ban record has been removed (player unbanned). " +
                             $"[Player: {ban.playerName} was banned by {ban.bannedBy} for {ban.banReason} until {ban.bannedUntil}.]");
@@ -430,25 +456,29 @@ namespace vMenuServer
         /// Someone trying to trigger fake server events? Well, goodbye idiots.
         /// </summary>
         /// <param name="source"></param>
-        public static void BanCheater(Player source)
+        public static async void BanCheater(Player source)
         {
-            var ban = new BanRecord()
+            bool enabled = (GetConvar("vMenuBanCheaters", "false") ?? "false") == "true";
+            if (enabled)
             {
-                bannedBy = "vMenu Auto Ban",
-                bannedUntil = new DateTime(3000, 1, 1),
-                banReason = "You have been automatically banned. If you believe this was done by error, please contact the server owner for support.",
-                identifiers = source.Identifiers.ToList(),
-                playerName = GetSafePlayerName(source.Name)
-            };
+                var ban = new BanRecord()
+                {
+                    bannedBy = "vMenu Auto Ban",
+                    bannedUntil = new DateTime(3000, 1, 1),
+                    banReason = "You have been automatically banned. If you believe this was done by error, please contact the server owner for support.",
+                    identifiers = source.Identifiers.ToList(),
+                    playerName = GetSafePlayerName(source.Name)
+                };
 
-            if (AddBan(ban))
-            {
-                TriggerEvent("vMenu:BanCheaterSuccessful", JsonConvert.SerializeObject(ban).ToString());
-                BanLog($"A cheater has been banned. {JsonConvert.SerializeObject(ban).ToString()}");
+                if (await AddBan(ban))
+                {
+                    TriggerEvent("vMenu:BanCheaterSuccessful", JsonConvert.SerializeObject(ban).ToString());
+                    BanLog($"A cheater has been banned. {JsonConvert.SerializeObject(ban).ToString()}");
+                }
+
+                source.TriggerEvent("vMenu:GoodBye"); // this is much more fun than just kicking them.
+                Log("A cheater has been banned because they attempted to trigger a fake event.");
             }
-
-            source.TriggerEvent("vMenu:GoodBye"); // this is much more fun than just kicking them.
-            Log("A cheater has been banned because they attempted to trigger a fake event.");
         }
 
 
@@ -459,9 +489,14 @@ namespace vMenuServer
         /// <returns></returns>
         public static string GetSafePlayerName(string playerName)
         {
-            string safeName = playerName.Replace("^", "").Replace("<", "").Replace(">", "").Replace("~", "");
-            safeName = Regex.Replace(safeName, @"[^\u0000-\u007F]+", string.Empty);
-            return safeName.Trim(new char[] { '.', ',', ' ', '!', '?' });
+            if (!string.IsNullOrEmpty(playerName))
+            {
+                string safeName = playerName.Replace("^", "").Replace("<", "").Replace(">", "").Replace("~", "");
+                safeName = Regex.Replace(safeName, @"[^\u0000-\u007F]+", string.Empty);
+                return safeName.Trim(new char[] { '.', ',', ' ', '!', '?' });
+            }
+            return "InvalidPlayerName";
+
         }
 
         /// <summary>
@@ -470,7 +505,7 @@ namespace vMenuServer
         /// <param name="banActionMessage"></param>
         public static void BanLog(string banActionMessage)
         {
-            if (GetConvar("vMenuLogBanActions", "false") == "true")
+            if (GetConvar("vMenuLogBanActions", "true") == "true")
             {
                 string file = LoadResourceFile(GetCurrentResourceName(), "vmenu.log") ?? "";
                 DateTime date = DateTime.Now;
@@ -481,7 +516,7 @@ namespace vMenuServer
                     (date.Minute < 10 ? "0" : "") + date.Minute + ":" +
                     (date.Second < 10 ? "0" : "") + date.Second;
                 string outputFile = file + $"[\t{formattedDate}\t] [BAN ACTION] {banActionMessage}\n";
-                SaveResourceFile(GetCurrentResourceName(), "vmenu.log", outputFile, outputFile.Length);
+                SaveResourceFile(GetCurrentResourceName(), "vmenu.log", outputFile, -1);
                 Log(banActionMessage + "\n");
             }
         }

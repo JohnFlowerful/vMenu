@@ -293,13 +293,13 @@ namespace vMenuClient
                         SetEntityCoords(PlayerPedId(), pos.X, pos.Y, 810f, false, false, false, true);
                 }
             }
-            else
-            {
-                if (inCar)
-                    SetPedCoordsKeepVehicle(PlayerPedId(), pos.X, pos.Y, outputZ + 2f);
-                else
-                    SetEntityCoords(PlayerPedId(), pos.X, pos.Y, outputZ + 2f, false, false, false, true);
-            }
+            //else
+            //{
+            //    if (inCar)
+            //        SetPedCoordsKeepVehicle(PlayerPedId(), pos.X, pos.Y, outputZ + 0.1f);
+            //    else
+            //        SetEntityCoords(PlayerPedId(), pos.X, pos.Y, outputZ + 0.1f, false, false, false, true);
+            //}
         }
 
         /// <summary>
@@ -383,7 +383,7 @@ namespace vMenuClient
         public async void BanPlayer(Player player, bool forever)
         {
             string banReason = await GetUserInput("Enter Ban Reason", "Banned by staff", 200);
-            if (banReason != "" && banReason != null && banReason.Length > 1 && banReason != "NULL")
+            if (!string.IsNullOrEmpty(banReason) && banReason.Length > 1 && banReason != "NULL")
             {
                 if (forever)
                 {
@@ -392,26 +392,37 @@ namespace vMenuClient
                 else
                 {
                     string banDurationHours = await GetUserInput("Ban Duration (in hours)                      Max: 720 (1 month)", "1.5", 10);
-                    if (double.TryParse(banDurationHours, out double banHours))
+                    if (!string.IsNullOrEmpty(banDurationHours))
                     {
-                        TriggerServerEvent("vMenu:TempBanPlayer", player.ServerId, banHours, banReason);
-                    }
-                    else
-                    {
-                        if (int.TryParse(banDurationHours, out int banHoursInt))
+                        if (double.TryParse(banDurationHours, out double banHours))
                         {
-                            TriggerServerEvent("vMenu:TempBanPlayer", player.ServerId, (double)banHoursInt, banReason);
+                            TriggerServerEvent("vMenu:TempBanPlayer", player.ServerId, banHours, banReason);
                         }
                         else
                         {
-                            Notify.Error(CommonErrors.InvalidInput);
+                            if (int.TryParse(banDurationHours, out int banHoursInt))
+                            {
+                                TriggerServerEvent("vMenu:TempBanPlayer", player.ServerId, (double)banHoursInt, banReason);
+                            }
+                            else
+                            {
+                                Notify.Error(CommonErrors.InvalidInput);
+                                TriggerEvent("chatMessage", $"[vMenu] The input is invalid or you cancelled the action, please try again.");
+                            }
                         }
                     }
+                    else
+                    {
+                        Notify.Error(CommonErrors.InvalidInput);
+                        TriggerEvent("chatMessage", $"[vMenu] The input is invalid or you cancelled the action, please try again.");
+                    }
+
                 }
             }
             else
             {
                 Notify.Error(CommonErrors.InvalidInput);
+                TriggerEvent("chatMessage", $"[vMenu] The input is invalid or you cancelled the action, please try again.");
             }
         }
         #endregion
@@ -634,7 +645,7 @@ namespace vMenuClient
             if (IsPedInAnyVehicle(PlayerPedId(), false))
             {
                 Vehicle tmpOldVehicle = new Vehicle(GetVehicle());
-                speed = tmpOldVehicle.Speed;
+                speed = GetEntitySpeedVector(tmpOldVehicle.Handle, true).Y; // get forward/backward speed only
                 rpm = tmpOldVehicle.CurrentRPM;
                 tmpOldVehicle = null;
             }
@@ -683,7 +694,7 @@ namespace vMenuClient
                     // Otherwise
                     else
                     {
-                        if (!Configuration.keepSpawnedVehiclesPersistent)
+                        if (!vMenuShared.ConfigManager.GetSettingsBool(vMenuShared.ConfigManager.SettingsCategory.vehicles, vMenuShared.ConfigManager.Setting.keep_spawned_vehicles_persistent))
                         {
                             // Set the vehicle to be no longer needed. This will make the game engine decide when it should be removed (when all players get too far away).
                             previousVehicle.IsPersistent = false;
@@ -697,17 +708,21 @@ namespace vMenuClient
 
             if (IsPedInAnyVehicle(PlayerPedId(), false) && (replacePrevious || !PermissionsManager.IsAllowed(Permission.VSDisableReplacePrevious)))
             {
-                if (GetPedInVehicleSeat(GetVehicle(), -1) == PlayerPedId() && IsVehiclePreviouslyOwnedByPlayer(GetVehicle()))
+                if (GetPedInVehicleSeat(GetVehicle(), -1) == PlayerPedId())// && IsVehiclePreviouslyOwnedByPlayer(GetVehicle()))
                 {
                     var tmpveh = GetVehicle();
                     SetVehicleHasBeenOwnedByPlayer(tmpveh, false);
                     SetEntityAsMissionEntity(tmpveh, true, true);
 
                     if (previousVehicle != null)
+                    {
                         if (previousVehicle.Handle == tmpveh)
+                        {
                             previousVehicle = null;
-
+                        }
+                    }
                     DeleteVehicle(ref tmpveh);
+                    Notify.Info("Your old car was removed to prevent your new car from glitching inside it. Next time, get out of your vehicle before spawning a new one if you want to keep your old one.");
                 }
             }
 
@@ -2345,7 +2360,7 @@ namespace vMenuClient
                 {
                     SetBlipSprite(blip, blipSprite);
                 }
-                
+
             }
             else
             {

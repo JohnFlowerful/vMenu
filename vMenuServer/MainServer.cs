@@ -9,21 +9,49 @@ using static CitizenFX.Core.Native.API;
 using Newtonsoft.Json;
 using System.Dynamic;
 using static vMenuServer.DebugLog;
+using static vMenuShared.ConfigManager;
 
 namespace vMenuServer
 {
 
     public static class DebugLog
     {
+        public enum LogLevel
+        {
+            error = 1,
+            success = 2,
+            info = 4,
+            warning = 3,
+            none = 0
+        }
+
         /// <summary>
         /// Global log data function, only logs when debugging is enabled.
         /// </summary>
         /// <param name="data"></param>
-        public static void Log(dynamic data)
+        public static void Log(dynamic data, LogLevel level = LogLevel.none)
         {
             if (MainServer.DebugMode)
             {
-                Debug.Write(data.ToString() + "\n");
+                string prefix = "[vMenu] ";
+                if (level == LogLevel.error)
+                {
+                    prefix = "^1[vMenu] [ERROR]^0 ";
+                }
+                else if (level == LogLevel.info)
+                {
+                    prefix = "^5[vMenu] [INFO]^0 ";
+                }
+                else if (level == LogLevel.success)
+                {
+                    prefix = "^2[vMenu] [SUCCESS]^0 ";
+                }
+                else if (level == LogLevel.warning)
+                {
+                    prefix = "^3[vMenu] [WARNING]^0 ";
+                }
+                Debug.WriteLine($"{prefix}[DEBUG LOG] {data.ToString()}");
+
             }
         }
     }
@@ -38,10 +66,15 @@ namespace vMenuServer
 
         private int currentHours = 9;
         private int currentMinutes = 0;
+        private int minuteClockSpeed = 2000;
+        private long minuteTimer = GetGameTimer();
+        private long timeSyncCooldown = GetGameTimer();
         private string currentWeather = "CLEAR";
         private bool dynamicWeather = true;
         private bool blackout = false;
+        private bool resetBlackout = false;
         private bool freezeTime = false;
+        private int dynamicWeatherMinutes = 10;
         private int dynamicWeatherTimeLeft = 5 * 12 * 10; // 5 seconds * 12 (because the loop checks 12 times a minute) * 10 (10 minutes)
         private long gameTimer = GetGameTimer();
         private List<string> CloudTypes = new List<string>()
@@ -74,6 +107,7 @@ namespace vMenuServer
             "Everything",
             "DontKickMe",
             "NoClip",
+            "Staff",
 
             // Online Players
             "OPMenu",
@@ -295,8 +329,9 @@ namespace vMenuServer
             "MSDeathNotifs",
             "MSNightVision",
             "MSThermalVision",
-            //"MSLocationBlips", // not yet implemented
+            "MSLocationBlips",
             "MSPlayerBlips",
+            "MSTeleportLocations",
             "MSConnectionMenu",
 
             // Voice Chat
@@ -309,6 +344,24 @@ namespace vMenuServer
         public List<string> addonVehicles = new List<string>();
         public List<string> addonPeds = new List<string>();
         public List<string> addonWeapons = new List<string>();
+        private List<string> weatherTypes = new List<string>()
+        {
+            "EXTRASUNNY",
+            "CLEAR",
+            "NEUTRAL",
+            "SMOG",
+            "FOGGY",
+            "CLOUDS",
+            "OVERCAST",
+            "CLEARING",
+            "RAIN",
+            "THUNDER",
+            "BLIZZARD",
+            "SNOW",
+            "SNOWLIGHT",
+            "XMAS",
+            "HALLOWEEN"
+        };
 
         #region Constructor
         /// <summary>
@@ -378,8 +431,8 @@ namespace vMenuServer
 
             if (GetCurrentResourceName() != "vMenu")
             {
-                Exception InvalidNameException = new Exception("\r\n\r\n[vMenu] INSTALLATION ERROR!\r\nThe name of the resource is not valid. " +
-                    "Please change the folder name from '" + GetCurrentResourceName() + "' to 'vMenu' (case sensitive) instead!\r\n\r\n\r\n");
+                Exception InvalidNameException = new Exception("\r\n\r\n^1[vMenu] INSTALLATION ERROR!\r\nThe name of the resource is not valid. " +
+                    "Please change the folder name from '^3" + GetCurrentResourceName() + "^0' to '^2vMenu^0' (case sensitive) instead!\r\n\r\n\r\n^0");
                 try
                 {
                     throw InvalidNameException;
@@ -391,6 +444,7 @@ namespace vMenuServer
             }
             else
             {
+                InitializeConfig();
                 // Add event handlers.
                 EventHandlers.Add("vMenu:SummonPlayer", new Action<Player, int>(SummonPlayer));
                 EventHandlers.Add("vMenu:KillPlayer", new Action<Player, int>(KillPlayer));
@@ -402,39 +456,70 @@ namespace vMenuServer
                 EventHandlers.Add("vMenu:DisconnectSelf", new Action<Player>(DisconnectSource));
 
                 string addons = LoadResourceFile(GetCurrentResourceName(), "addons.json") ?? LoadResourceFile(GetCurrentResourceName(), "config/addons.json") ?? "{}";
-                var json = JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(addons);
-
-                if (json.ContainsKey("vehicles"))
+                try
                 {
-                    foreach (var modelName in json["vehicles"])
+                    Dictionary<string, List<string>> json = JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(addons);
+                    if (json.ContainsKey("vehicles"))
                     {
-                        Log("Addon vehicle loaded: " + modelName);
-                        addonVehicles.Add(modelName);
+                        foreach (var modelName in json["vehicles"])
+                        {
+                            Log("Addon vehicle loaded: " + modelName);
+                            addonVehicles.Add(modelName);
+                        }
+                    }
+
+                    if (json.ContainsKey("peds"))
+                    {
+                        foreach (var modelName in json["peds"])
+                        {
+                            Log("Addon ped loaded:" + modelName);
+                            addonPeds.Add(modelName);
+                        }
+                    }
+
+                    if (json.ContainsKey("weapons"))
+                    {
+                        foreach (var modelName in json["weapons"])
+                        {
+                            Log("Addon weapon loaded:" + modelName);
+                            addonWeapons.Add(modelName);
+                        }
+                    }
+                }
+                catch (JsonReaderException ex)
+                {
+                    Debug.WriteLine($"\n\n^1[vMenu] [ERROR] ^0Your addons.json file contains a problem! Error details: {ex.Message}\n\n");
+                }
+
+
+                dynamicWeather = GetSettingsBool(SettingsCategory.weather, Setting.enable_dynamic_weather);
+                if (GetSettingsInt(SettingsCategory.weather, Setting.dynamic_weather_timer) != -1)
+                {
+                    dynamicWeatherMinutes = GetSettingsInt(SettingsCategory.weather, Setting.dynamic_weather_timer);
+                    dynamicWeatherTimeLeft = 5 * 12 * dynamicWeatherMinutes;
+                }
+
+
+
+                string defaultWeather = GetSettingsString(SettingsCategory.weather, Setting.default_weather);
+
+                if (!string.IsNullOrEmpty(defaultWeather))
+                {
+                    if (weatherTypes.Contains(defaultWeather))
+                    {
+                        currentWeather = defaultWeather;
                     }
                 }
 
-                if (json.ContainsKey("peds"))
-                {
-                    foreach (var modelName in json["peds"])
-                    {
-                        Log("Addon ped loaded:" + modelName);
-                        addonPeds.Add(modelName);
-                    }
-                }
+                currentHours = GetSettingsInt(SettingsCategory.time, Setting.default_time_hour);
+                currentHours = (currentHours >= 0 && currentHours < 24) ? currentHours : 9;
+                currentMinutes = GetSettingsInt(SettingsCategory.time, Setting.default_time_min);
+                currentMinutes = (currentMinutes >= 0 && currentMinutes < 60) ? currentMinutes : 0;
 
-                if (json.ContainsKey("weapons"))
-                {
-                    foreach (var modelName in json["weapons"])
-                    {
-                        Log("Addon weapon loaded:" + modelName);
-                        addonWeapons.Add(modelName);
-                    }
-                }
 
-                if ((GetConvar("vMenuDisableDynamicWeather", "false") ?? "false").ToLower() == "true")
-                {
-                    dynamicWeather = false;
-                }
+                minuteClockSpeed = GetSettingsInt(SettingsCategory.time, Setting.ingame_minute_duration);
+                minuteClockSpeed = (minuteClockSpeed > 0) ? minuteClockSpeed : 2000;
+
                 Tick += WeatherLoop;
                 Tick += TimeLoop;
             }
@@ -457,25 +542,36 @@ namespace vMenuServer
         /// <returns></returns>
         private async Task TimeLoop()
         {
-            await Delay(4000);
-            if (freezeTime)
+            if (GetSettingsBool(SettingsCategory.time, Setting.enable_time_sync))
             {
-                TriggerClientEvent("vMenu:SetTime", currentHours, currentMinutes, freezeTime);
-            }
-            else
-            {
-                currentMinutes += 2;
-                if (currentMinutes > 59)
+                await Delay(5);
+                if (!freezeTime)
                 {
-                    currentMinutes = 0;
-                    currentHours++;
+                    // only add a minute if the timer has reached the configured duration (2000ms (2s) by default).
+                    if (GetGameTimer() - minuteTimer > minuteClockSpeed)
+                    {
+                        currentMinutes++;
+                        minuteTimer = GetGameTimer();
+                    }
+
+                    if (currentMinutes > 59)
+                    {
+                        currentMinutes = 0;
+                        currentHours++;
+                    }
+                    if (currentHours > 23)
+                    {
+                        currentHours = 0;
+                    }
                 }
-                if (currentHours > 23)
+
+                if (GetGameTimer() - timeSyncCooldown > 5000)
                 {
-                    currentHours = 0;
+                    TriggerClientEvent("vMenu:SetTime", currentHours, currentMinutes, freezeTime);
+                    timeSyncCooldown = GetGameTimer();
                 }
-                TriggerClientEvent("vMenu:SetTime", currentHours, currentMinutes, freezeTime);
             }
+
         }
 
         /// <summary>
@@ -485,27 +581,45 @@ namespace vMenuServer
         private async Task WeatherLoop()
         {
             await Delay(5000);
-            if (dynamicWeather)
-            {
-                dynamicWeatherTimeLeft -= 10;
-                if (dynamicWeatherTimeLeft < 10)
-                {
-                    dynamicWeatherTimeLeft = 5 * 12 * 10;
-                    RefreshWeather();
 
-                    if (DebugMode)
+            if (GetSettingsBool(SettingsCategory.weather, Setting.enable_weather_sync))
+            {
+                if (dynamicWeather)
+                {
+                    dynamicWeatherTimeLeft -= 10;
+                    if (resetBlackout && dynamicWeatherTimeLeft < (5 * 12 * dynamicWeatherMinutes) - 60) // if 1 minute has passed since last change, and resetblackout is true, disable blackout and reset it.
                     {
-                        long gameTimer2 = GetGameTimer();
-                        Log($"Duration: {((gameTimer2 - gameTimer) / 100).ToString()}. New Weather Type: {currentWeather}");
-                        gameTimer = gameTimer2;
+                        resetBlackout = false;
+                        blackout = false;
+                    }
+                    if (dynamicWeatherTimeLeft < 10)
+                    {
+                        dynamicWeatherTimeLeft = 5 * 12 * dynamicWeatherMinutes;
+                        RefreshWeather();
+
+                        if (DebugMode)
+                        {
+                            long gameTimer2 = GetGameTimer();
+                            Log($"Changing weather, last weather duration: {((gameTimer2 - gameTimer) / 1000 / 60).ToString()} minutes. New Weather Type: {currentWeather}");
+                            gameTimer = gameTimer2;
+                        }
                     }
                 }
+                else
+                {
+                    dynamicWeatherTimeLeft = 5 * 12 * dynamicWeatherMinutes;
+                }
+                if (GetSettingsBool(SettingsCategory.weather, Setting.allow_random_blackout) && currentWeather == "THUNDER" && new Random().Next(5) == 1 && !blackout && !resetBlackout)
+                {
+                    blackout = true;
+                    resetBlackout = true;
+                }
+                if (blackout == false && resetBlackout)
+                {
+                    resetBlackout = false;
+                }
+                TriggerClientEvent("vMenu:SetWeather", currentWeather, blackout, dynamicWeather);
             }
-            else
-            {
-                dynamicWeatherTimeLeft = 5 * 12 * 10;
-            }
-            TriggerClientEvent("vMenu:SetWeather", currentWeather, blackout, dynamicWeather);
         }
 
         /// <summary>
@@ -712,10 +826,6 @@ namespace vMenuServer
         /// <param name="player"></param>
         private async void SendPermissionsAsync([FromSource] Player player)
         {
-            // First send the vehicle & ped addons list
-            TriggerClientEvent(player, "vMenu:SetupAddonCars", "vehicles", addonVehicles);
-            TriggerClientEvent(player, "vMenu:SetupAddonPeds", "peds", addonPeds);
-            TriggerClientEvent(player, "vMenu:SetupAddonWeapons", "weapons", addonWeapons);
 
             // Get Permissions
             Dictionary<string, bool> perms = new Dictionary<string, bool>();
@@ -726,20 +836,10 @@ namespace vMenuServer
                 perms.Add(ace, allowed);
             }
 
-            // Get Settings
-            Dictionary<string, string> options = new Dictionary<string, string>
-            {
-                { "menuKey", GetConvarInt("vMenuToggleMenuKey", 244).ToString() ?? "244" },
-                { "noclipKey", GetConvarInt("vMenuNoClipKey", 289).ToString() ?? "289" },
-                { "disableSync", GetConvar("vMenuDisableTimeAndWeatherSync", "false") ?? "false"}
-            };
 
-            // Send Permissions
-            TriggerClientEvent(player, "vMenu:SetPermissions", perms);
+            player.TriggerEvent("vMenu:ConfigureClient", addonVehicles, addonPeds, addonWeapons, perms);
 
-            // Send Settings
-            await Delay(50);
-            TriggerClientEvent(player, "vMenu:SetOptions", options);
+
             while (!UpdateChecker.CheckedForUpdates)
             {
                 await Delay(0);
@@ -815,7 +915,8 @@ namespace vMenuServer
         /// <param name="kickLogMesage"></param>
         private static void KickLog(string kickLogMesage)
         {
-            if (GetConvar("vMenuLogKickActions", "true") == "true")
+            //if (GetConvar("vMenuLogKickActions", "true") == "true")
+            if (GetSettingsBool(SettingsCategory.system, Setting.log_kick_actions))
             {
                 string file = LoadResourceFile(GetCurrentResourceName(), "vmenu.log") ?? "";
                 DateTime date = DateTime.Now;
@@ -827,7 +928,7 @@ namespace vMenuServer
                     (date.Second < 10 ? "0" : "") + date.Second;
                 string outputFile = file + $"[\t{formattedDate}\t] [KICK ACTION] {kickLogMesage}\n";
                 SaveResourceFile(GetCurrentResourceName(), "vmenu.log", outputFile, -1);
-                Debug.Write(kickLogMesage + "\n");
+                Debug.WriteLine("^3[vMenu] [KICK]^0 " + kickLogMesage + "\n");
             }
         }
     }

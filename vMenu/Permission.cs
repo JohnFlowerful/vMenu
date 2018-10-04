@@ -6,6 +6,7 @@
         Everything,
         DontKickMe,
         NoClip,
+        Staff,
 
         // Online Players
         OPMenu,
@@ -238,6 +239,7 @@
         MSThermalVision,
         MSLocationBlips,
         MSPlayerBlips,
+        MSTeleportLocations,
         MSConnectionMenu,
 
         // Voice Chat

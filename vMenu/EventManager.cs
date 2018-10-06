@@ -49,7 +49,7 @@ namespace vMenuClient
         {
             MainMenu.SetPermissions(perms);
 
-            
+
             VehicleSpawner.AddonVehicles = new Dictionary<string, uint>();
             foreach (var addon in addonVehicles)
             {
@@ -89,12 +89,12 @@ namespace vMenuClient
                 }
             }
 
-            currentHours = GetSettingsInt(SettingsCategory.time, Setting.default_time_hour);
+            currentHours = GetSettingsInt(Setting.vmenu_default_time_hour);
             currentHours = (currentHours >= 0 && currentHours < 24) ? currentHours : 9;
-            currentMinutes = GetSettingsInt(SettingsCategory.time, Setting.default_time_min);
+            currentMinutes = GetSettingsInt(Setting.vmenu_default_time_min);
             currentMinutes = (currentMinutes >= 0 && currentMinutes < 60) ? currentMinutes : 0;
 
-            minuteClockSpeed = GetSettingsInt(SettingsCategory.time, Setting.ingame_minute_duration);
+            minuteClockSpeed = GetSettingsInt(Setting.vmenu_ingame_minute_duration);
             minuteClockSpeed = (minuteClockSpeed > 0) ? minuteClockSpeed : 2000;
 
             MainMenu.PreSetupComplete = true;
@@ -108,7 +108,7 @@ namespace vMenuClient
             Debug.Write("\n\n\n\n[vMenu] vMenu is outdated, please update asap.\n\n\n\n");
             await Delay(5000);
             cf.Log("Sending alert now.");
-            if (GetSettingsBool(SettingsCategory.system, Setting.outdated_version_notify_players))
+            if (GetSettingsBool(Setting.vmenu_outdated_version_notify_players))
             {
                 Notify.Alert("vMenu is outdated, if you are the server administrator, please update vMenu as soon as possible.", true, true);
             }
@@ -133,14 +133,14 @@ namespace vMenuClient
             ForceSocialClubUpdate();
         }
 
-       
+
         /// <summary>
         /// OnTick loop to keep the weather synced.
         /// </summary>
         /// <returns></returns>
         private async Task WeatherSync()
         {
-            if (GetSettingsBool(SettingsCategory.weather, Setting.enable_weather_sync))
+            if (GetSettingsBool(Setting.vmenu_enable_weather_sync))
             {
                 // Weather is set every 500ms, if it's changed, then it will transition to the new phase within 20 seconds.
                 await Delay(500);
@@ -199,7 +199,7 @@ namespace vMenuClient
         private async Task TimeSync()
         {
             // Check if the time sync should be disabled.
-            if (GetSettingsBool(SettingsCategory.time, Setting.enable_time_sync))
+            if (GetSettingsBool(Setting.vmenu_enable_time_sync))
             {
                 // If time is frozen...
                 if (freezeTime)
@@ -211,14 +211,21 @@ namespace vMenuClient
                 // Otherwise...
                 else
                 {
-                    await Delay(5);
+                    if (minuteClockSpeed > 2000)
+                    {
+                        await Delay(2000);
+                    }
+                    else
+                    {
+                        await Delay(minuteClockSpeed);
+                    }
                     // only add a minute if the timer has reached the configured duration (2000ms (2s) by default).
                     if (GetGameTimer() - minuteTimer > minuteClockSpeed)
                     {
                         currentMinutes++;
                         minuteTimer = GetGameTimer();
                     }
-                    
+
                     if (currentMinutes > 59)
                     {
                         currentMinutes = 0;

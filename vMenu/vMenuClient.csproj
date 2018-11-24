@@ -68,6 +68,7 @@
     <Compile Include="menus\About.cs" />
     <Compile Include="menus\BannedPlayers.cs" />
     <Compile Include="menus\MiscSettings.cs" />
+    <Compile Include="menus\MpPedCustomization.cs" />
     <Compile Include="menus\OnlinePlayers.cs" />
     <Compile Include="menus\PlayerAppearance.cs" />
     <Compile Include="menus\Recording.cs" />
@@ -78,6 +79,7 @@
     <Compile Include="menus\VoiceChat.cs" />
     <Compile Include="menus\WeaponOptions.cs" />
     <Compile Include="menus\WeatherOptions.cs" />
+    <Compile Include="MpPedDataManager.cs" />
     <Compile Include="NoclipMenu.cs" />
     <Compile Include="Notification.cs" />
     <Compile Include="PedScenarios.cs" />
@@ -90,6 +92,11 @@
     <Compile Include="ValidWeapon.cs" />
     <Compile Include="VehicleData.cs" />
     <Compile Include="Vehicles.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="mp_ped_data.js">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>

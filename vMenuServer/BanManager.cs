@@ -193,7 +193,7 @@ namespace vMenuServer
         {
             if (IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.PermBan") || IsPlayerAceAllowed(source.Handle, "vMenu.Everything") || IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.All"))
             {
-                Player target = new PlayerList()[targetPlayer];
+                Player target = Players[targetPlayer];
                 if (target != null)
                 {
                     if (!IsPlayerAceAllowed(target.Handle, "vMenu.DontBanMe"))
@@ -249,7 +249,7 @@ namespace vMenuServer
                 IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.All"))
             {
                 Log("Source player is allowed to ban others.", LogLevel.info);
-                Player target = new PlayerList()[targetPlayer];
+                Player target = Players[targetPlayer];
                 if (target != null)
                 {
                     Log("Target player is not null so moving on.", LogLevel.info);
@@ -457,15 +457,20 @@ namespace vMenuServer
         /// <param name="source"></param>
         public static async void BanCheater(Player source)
         {
-            //bool enabled = (GetConvar("vMenuBanCheaters", "false") ?? "false") == "true";
             bool enabled = vMenuShared.ConfigManager.GetSettingsBool(vMenuShared.ConfigManager.Setting.vmenu_auto_ban_cheaters);
             if (enabled)
             {
+                string reason = vMenuShared.ConfigManager.GetSettingsString(vMenuShared.ConfigManager.Setting.vmenu_auto_ban_cheaters_ban_message);
+
+                if (string.IsNullOrEmpty(reason))
+                {
+                    reason = "You have been automatically banned. If you believe this was done by error, please contact the server owner for support.";
+                }
                 var ban = new BanRecord()
                 {
                     bannedBy = "vMenu Auto Ban",
                     bannedUntil = new DateTime(3000, 1, 1),
-                    banReason = "You have been automatically banned. If you believe this was done by error, please contact the server owner for support.",
+                    banReason = reason,
                     identifiers = source.Identifiers.ToList(),
                     playerName = GetSafePlayerName(source.Name)
                 };

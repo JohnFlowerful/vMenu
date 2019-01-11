@@ -3,17 +3,20 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using MenuAPI;
+using Newtonsoft.Json;
 using CitizenFX.Core;
+using static CitizenFX.Core.UI.Screen;
 using static CitizenFX.Core.Native.API;
-using NativeUI;
+using static vMenuClient.CommonFunctions;
+using static vMenuShared.PermissionsManager;
 
 namespace vMenuClient
 {
     public class NoclipMenu : BaseScript
     {
-        private CommonFunctions cf = MainMenu.Cf;
         private bool setupDone = false;
-        private UIMenu noclipMenu = null;
+        private Menu noclipMenu = null;
         private int currentSpeed = 0;
 
         private List<string> speeds = new List<string>()
@@ -43,15 +46,17 @@ namespace vMenuClient
         private async Task OnTick()
         {
             // Setup is not done or cf is null.
-            if (cf != null && !setupDone)
+            if (!setupDone)
             {
                 Setup();
-            }
-            // Cf is null, update it.
-            else if (cf == null)
-            {
-                cf = MainMenu.Cf;
-                await Delay(0);
+
+                // wait for setup in MainMenu (permissions and addons) to be done before adding the noclip menu.
+                while (!MainMenu.ConfigOptionsSetupComplete || !MainMenu.PermissionsSetupComplete)
+                {
+                    await Delay(0);
+                }
+                // Add the noclip menu
+                MenuController.AddMenu(noclipMenu);
             }
             // Setup is done.
             else
@@ -64,11 +69,12 @@ namespace vMenuClient
                 {
                     while (MainMenu.NoClipEnabled)
                     {
-                        var noclipEntity = IsPedInAnyVehicle(PlayerPedId(), false) ? cf.GetVehicle() : PlayerPedId();
+                        noclipMenu.InstructionalButtons[Control.Sprint] = $"Change speed ({speeds[currentSpeed]})";
+                        var noclipEntity = Game.PlayerPed.IsInVehicle() ? GetVehicle().Handle : Game.PlayerPed.Handle;
 
                         if (noclipMenu.Visible == false)
                         {
-                            noclipMenu.Visible = true;
+                            noclipMenu.OpenMenu();
                         }
                         FreezeEntityPosition(noclipEntity, true);
                         SetEntityInvincible(noclipEntity, true);
@@ -100,7 +106,7 @@ namespace vMenuClient
                                 {
                                     currentSpeed = 0;
                                 }
-                                noclipMenu.MenuItems[0].SetRightLabel(speeds[currentSpeed]);
+                                noclipMenu.GetMenuItems()[0].Label = speeds[currentSpeed];
                             }
 
                             if (Game.IsDisabledControlPressed(0, Control.MoveUpOnly))
@@ -113,11 +119,11 @@ namespace vMenuClient
                             }
                             if (Game.IsDisabledControlPressed(0, Control.MoveLeftOnly))
                             {
-                                SetEntityHeading(PlayerPedId(), GetEntityHeading(PlayerPedId()) + 3f);
+                                SetEntityHeading(Game.PlayerPed.Handle, GetEntityHeading(Game.PlayerPed.Handle) + 3f);
                             }
                             if (Game.IsDisabledControlPressed(0, Control.MoveRightOnly))
                             {
-                                SetEntityHeading(PlayerPedId(), GetEntityHeading(PlayerPedId()) - 3f);
+                                SetEntityHeading(Game.PlayerPed.Handle, GetEntityHeading(Game.PlayerPed.Handle) - 3f);
                             }
                             if (Game.IsDisabledControlPressed(0, Control.Cover))
                             {
@@ -155,7 +161,7 @@ namespace vMenuClient
 
                     if (noclipMenu.Visible && !MainMenu.NoClipEnabled)
                     {
-                        noclipMenu.Visible = false;
+                        noclipMenu.CloseMenu();
                     }
 
                 }
@@ -167,42 +173,33 @@ namespace vMenuClient
         /// </summary>
         private void Setup()
         {
+            noclipMenu = new Menu("No Clip", "Controls") { IgnoreDontOpenMenus = true };
 
-            noclipMenu = new UIMenu("No Clip", "Controls", true)
+            MenuItem speed = new MenuItem("Current Moving Speed", "This is your current moving speed.")
             {
-                MouseControlsEnabled = false,
-                MouseEdgeEnabled = false,
-                ControlDisablingEnabled = false,
-                ScaleWithSafezone = false
+                Label = speeds[currentSpeed]
             };
-            noclipMenu.SetMenuWidthOffset(50);
 
+            noclipMenu.OnMenuOpen += (m) =>
+            {
+                if (MainMenu.NoClipEnabled)
+                    HelpMessage.Custom("NoClip is now active. Look at the instructional buttons for all the keybinds. You can view your current moving speed all the way on the bottom right instructional button.");
+            };
 
+            noclipMenu.AddMenuItem(speed);
 
-            UIMenuItem speed = new UIMenuItem("Current Moving Speed", "This is your current moving speed.");
-            speed.SetRightLabel(speeds[currentSpeed]);
-
-            noclipMenu.AddItem(speed);
-
-            noclipMenu.DisableInstructionalButtons(true);
-            noclipMenu.DisableInstructionalButtons(false);
-
-            // Only disable the default instructional buttons (back & select) (requires modified NativeUI build.)
-            noclipMenu.DisableInstructionalButtons(false, disableDefaultButtons: true);
-
-            noclipMenu.AddInstructionalButton(new InstructionalButton(Control.Sprint, "Change Speed"));
-            noclipMenu.AddInstructionalButton(new InstructionalButton(Control.MoveUpDown, "Go Forwards/Backwards"));
-            noclipMenu.AddInstructionalButton(new InstructionalButton(Control.MoveLeftRight, "Turn Left/Right"));
-            noclipMenu.AddInstructionalButton(new InstructionalButton(Control.Cover, "Go Up"));
-            noclipMenu.AddInstructionalButton(new InstructionalButton(Control.MultiplayerInfo, "Go Down"));
-
-
-            MainMenu.Mp.Add(noclipMenu);
+            noclipMenu.InstructionalButtons.Clear();
+            noclipMenu.InstructionalButtons.Add(Control.Sprint, $"Change speed ({speeds[currentSpeed]})");
+            noclipMenu.InstructionalButtons.Add(Control.MoveUpDown, "Go Forwards/Backwards");
+            noclipMenu.InstructionalButtons.Add(Control.MoveLeftRight, "Turn Left/Right");
+            noclipMenu.InstructionalButtons.Add(Control.MultiplayerInfo, "Go Down");
+            noclipMenu.InstructionalButtons.Add(Control.Cover, "Go Up");
+            noclipMenu.InstructionalButtons.Add((Control)MainMenu.NoClipKey, "Disable Noclip");
 
             setupDone = true;
         }
 
-        public UIMenu GetMenu()
+        public Menu GetMenu()
         {
             return noclipMenu;
         }

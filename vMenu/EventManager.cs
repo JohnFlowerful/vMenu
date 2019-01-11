@@ -3,16 +3,20 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using MenuAPI;
+using Newtonsoft.Json;
 using CitizenFX.Core;
+using static CitizenFX.Core.UI.Screen;
 using static CitizenFX.Core.Native.API;
+using static vMenuClient.CommonFunctions;
 using static vMenuShared.ConfigManager;
+using static vMenuShared.PermissionsManager;
 
 namespace vMenuClient
 {
     public class EventManager : BaseScript
     {
         // common functions.
-        private CommonFunctions cf = MainMenu.Cf;
         public static string currentWeatherType = GetSettingsString(Setting.vmenu_default_weather);
         public static bool blackoutMode = false;
         public static bool dynamicWeather = GetSettingsBool(Setting.vmenu_enable_dynamic_weather);
@@ -30,9 +34,11 @@ namespace vMenuClient
         {
             // Add event handlers.
             // Handle the SetPermissions event.
-            EventHandlers.Add("vMenu:ConfigureClient", new Action<dynamic, dynamic, dynamic, dynamic>(ConfigureClient));
+            //EventHandlers.Add("vMenu:ConfigureClient", new Action<dynamic, dynamic, dynamic, dynamic>(ConfigureClient));
+            EventHandlers.Add("vMenu:SetAddons", new Action(SetAddons));
+            EventHandlers.Add("vMenu:SetPermissions", new Action<string>(MainMenu.SetPermissions));
             EventHandlers.Add("vMenu:GoToPlayer", new Action<string>(SummonPlayer));
-            EventHandlers.Add("vMenu:KillMe", new Action(KillMe));
+            EventHandlers.Add("vMenu:KillMe", new Action<string>(KillMe));
             EventHandlers.Add("vMenu:Notify", new Action<string>(NotifyPlayer));
             EventHandlers.Add("vMenu:SetWeather", new Action<string, bool, bool>(SetWeather));
             EventHandlers.Add("vMenu:SetClouds", new Action<float, string>(SetClouds));
@@ -42,53 +48,82 @@ namespace vMenuClient
             EventHandlers.Add("vMenu:OutdatedResource", new Action(NotifyOutdatedVersion));
             EventHandlers.Add("vMenu:ClearArea", new Action<float, float, float>(ClearAreaNearPos));
             EventHandlers.Add("vMenu:updatePedDecors", new Action(UpdatePedDecors));
+            EventHandlers.Add("playerSpawned", new Action(SetAppearanceOnFirstSpawn));
             Tick += WeatherSync;
             Tick += TimeSync;
         }
 
-        private void ConfigureClient(dynamic addonVehicles, dynamic addonPeds, dynamic addonWeapons, dynamic perms)
+        private bool firstSpawn = true;
+        /// <summary>
+        /// Sets the saved character whenever the player first spawns.
+        /// </summary>
+        private async void SetAppearanceOnFirstSpawn()
         {
-            MainMenu.SetPermissions(perms);
+            if (firstSpawn)
+            {
+                firstSpawn = false;
+                if (MainMenu.MiscSettingsMenu != null && MainMenu.MpPedCustomizationMenu != null && MainMenu.MiscSettingsMenu.MiscRespawnDefaultCharacter && !string.IsNullOrEmpty(GetResourceKvpString("vmenu_default_character")) && !GetSettingsBool(Setting.vmenu_disable_spawning_as_default_character))
+                {
+                    await MainMenu.MpPedCustomizationMenu.SpawnThisCharacter(GetResourceKvpString("vmenu_default_character"), false);
+                }
+                while (!IsScreenFadedIn() || IsPlayerSwitchInProgress() || IsPauseMenuActive() || GetIsLoadingScreenActive())
+                {
+                    await Delay(0);
+                }
+                if (MainMenu.WeaponLoadoutsMenu != null && MainMenu.WeaponLoadoutsMenu.WeaponLoadoutsSetLoadoutOnRespawn && IsAllowed(Permission.WLEquipOnRespawn))
+                {
+                    await SpawnWeaponLoadoutAsync("vmenu_temp_weapons_loadout_before_respawn", true);
+                }
+            }
+        }
 
-
+        private void SetAddons()
+        {
+            // reset addons
             VehicleSpawner.AddonVehicles = new Dictionary<string, uint>();
-            foreach (var addon in addonVehicles)
-            {
-                string modelName = addon.ToString();
-                uint modelHash = (uint)GetHashKey(modelName);
-                cf.Log($"Addon Name: {modelName}\tAddon Hash (uint): {modelHash}.");
-
-                if (!VehicleSpawner.AddonVehicles.ContainsKey(modelName))
-                {
-                    VehicleSpawner.AddonVehicles.Add(modelName, modelHash);
-                }
-            }
-
-            PlayerAppearance.AddonPeds = new Dictionary<string, uint>();
-            foreach (var addon in addonPeds)
-            {
-                string modelName = addon.ToString();
-                uint modelHash = (uint)GetHashKey(modelName);
-                cf.Log($"Addon Name: {modelName}\tAddon Hash (uint): {modelHash}.");
-
-                if (!PlayerAppearance.AddonPeds.ContainsKey(modelName))
-                {
-                    PlayerAppearance.AddonPeds.Add(modelName, modelHash);
-                }
-            }
-
             WeaponOptions.AddonWeapons = new Dictionary<string, uint>();
-            foreach (var addon in addonWeapons)
-            {
-                string modelName = addon.ToString();
-                uint modelHash = (uint)GetHashKey(modelName);
-                cf.Log($"Addon Name: {modelName}\tAddon Hash (uint): {modelHash}.");
+            PlayerAppearance.AddonPeds = new Dictionary<string, uint>();
 
-                if (!WeaponOptions.AddonWeapons.ContainsKey(modelName))
+            string jsonData = LoadResourceFile(GetCurrentResourceName(), "config/addons.json") ?? "{}";
+            try
+            {
+                // load new addons.
+                var addons = JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(jsonData);
+
+                // load vehicles
+                if (addons.ContainsKey("vehicles"))
                 {
-                    WeaponOptions.AddonWeapons.Add(modelName, modelHash);
+                    foreach (string addon in addons["vehicles"])
+                    {
+                        VehicleSpawner.AddonVehicles.Add(addon, (uint)GetHashKey(addon));
+                    }
+                }
+
+                // load weapons
+                if (addons.ContainsKey("weapons"))
+                {
+                    foreach (string addon in addons["weapons"])
+                    {
+                        WeaponOptions.AddonWeapons.Add(addon, (uint)GetHashKey(addon));
+                    }
+                }
+
+                // load peds.
+                if (addons.ContainsKey("peds"))
+                {
+                    foreach (string addon in addons["peds"])
+                    {
+                        PlayerAppearance.AddonPeds.Add(addon, (uint)GetHashKey(addon));
+                    }
                 }
             }
+            catch (JsonReaderException ex)
+            {
+                Debug.WriteLine($"\n\n^1[vMenu] [ERROR] ^7Your addons.json file contains a problem! Error details: {ex.Message}\n\n");
+            }
+
+            FunctionsController.flaresAllowed = false;
+            FunctionsController.bombsAllowed = false;
 
             currentHours = GetSettingsInt(Setting.vmenu_default_time_hour);
             currentHours = (currentHours >= 0 && currentHours < 24) ? currentHours : 9;
@@ -98,7 +133,9 @@ namespace vMenuClient
             minuteClockSpeed = GetSettingsInt(Setting.vmenu_ingame_minute_duration);
             minuteClockSpeed = (minuteClockSpeed > 0) ? minuteClockSpeed : 2000;
 
-            MainMenu.PreSetupComplete = true;
+            UpdateWeatherParticlesOnce();
+
+            MainMenu.ConfigOptionsSetupComplete = true;
         }
 
         /// <summary>
@@ -108,7 +145,7 @@ namespace vMenuClient
         {
             Debug.Write("\n\n\n\n[vMenu] vMenu is outdated, please update asap.\n\n\n\n");
             await Delay(5000);
-            cf.Log("Sending alert now.");
+            Log("Sending alert now.");
             if (GetSettingsBool(Setting.vmenu_outdated_version_notify_players))
             {
                 Notify.Alert("vMenu is outdated, if you are the server administrator, please update vMenu as soon as possible.", true, true);
@@ -130,8 +167,32 @@ namespace vMenuClient
         /// </summary>
         private void GoodBye()
         {
-            cf.Log("fuck you.");
+            Log("fuck you.");
             ForceSocialClubUpdate();
+        }
+
+        private async void UpdateWeatherParticlesOnce()
+        {
+            if (currentWeatherType.ToUpper() == "XMAS")
+            {
+                if (!HasNamedPtfxAssetLoaded("core_snow"))
+                {
+                    RequestNamedPtfxAsset("core_snow");
+                    while (!HasNamedPtfxAssetLoaded("core_snow"))
+                    {
+                        await Delay(0);
+                    }
+                }
+                UseParticleFxAssetNextCall("core_snow");
+                SetForceVehicleTrails(true);
+                SetForcePedFootstepsTracks(true);
+            }
+            else
+            {
+                SetForceVehicleTrails(false);
+                SetForcePedFootstepsTracks(false);
+                RemoveNamedPtfxAsset("core_snow");
+            }
         }
 
         /// <summary>
@@ -146,29 +207,11 @@ namespace vMenuClient
                 await Delay(500);
 
                 var justChanged = false;
+                UpdateWeatherParticlesOnce();
                 if (currentWeatherType != lastWeather)
                 {
-                    cf.Log($"Start changing weather type.\nOld weather: {lastWeather}.\nNew weather type: {currentWeatherType}.\nBlackout? {blackoutMode}.\nThis change will take 45.5 seconds!");
-                    if (currentWeatherType == "XMAS")
-                    {
-                        if (!HasNamedPtfxAssetLoaded("core_snow"))
-                        {
-                            RequestNamedPtfxAsset("core_snow");
-                            while (!HasNamedPtfxAssetLoaded("core_snow"))
-                            {
-                                await Delay(0);
-                            }
-                        }
-                        UseParticleFxAssetNextCall("core_snow");
-                        SetForceVehicleTrails(true);
-                        SetForcePedFootstepsTracks(true);
-                    }
-                    else
-                    {
-                        SetForceVehicleTrails(false);
-                        SetForcePedFootstepsTracks(false);
-                        RemoveNamedPtfxAsset("core_snow");
-                    }
+                    Log($"Start changing weather type.\nOld weather: {lastWeather}.\nNew weather type: {currentWeatherType}.\nBlackout? {blackoutMode}.\nThis change will take 45.5 seconds!");
+
                     ClearWeatherTypePersist();
                     ClearOverrideWeather();
                     SetWeatherTypeNow(lastWeather);
@@ -181,7 +224,7 @@ namespace vMenuClient
                     }
                     SetWeatherTypeNow(currentWeatherType);
                     justChanged = true;
-                    cf.Log("done changing weather type (duration: 45.5 seconds)");
+                    Log("done changing weather type (duration: 45.5 seconds)");
                 }
                 if (!justChanged)
                 {
@@ -303,10 +346,10 @@ namespace vMenuClient
         /// <summary>
         /// Kill this player, poor thing, someone wants you dead... R.I.P.
         /// </summary>
-        private void KillMe()
+        private void KillMe(string sourceName)
         {
-            Notify.Info("Someone wanted you dead.... Sorry.");
-            SetEntityHealth(PlayerPedId(), 0);
+            Notify.Alert($"You have been killed by <C>{GetSafePlayerName(sourceName)}</C>~s~ using the ~r~Kill Player~s~ option in vMenu.");
+            SetEntityHealth(Game.PlayerPed.Handle, 0);
         }
 
         /// <summary>
@@ -315,7 +358,7 @@ namespace vMenuClient
         /// <param name="targetPlayer"></param>
         private void SummonPlayer(string targetPlayer)
         {
-            cf.TeleportToPlayerAsync(GetPlayerFromServerId(int.Parse(targetPlayer)));
+            TeleportToPlayer(GetPlayerFromServerId(int.Parse(targetPlayer)));
         }
 
         /// <summary>

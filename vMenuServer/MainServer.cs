@@ -51,7 +51,6 @@ namespace vMenuServer
                     prefix = "^3[vMenu] [WARNING]^7 ";
                 }
                 Debug.WriteLine($"{prefix}[DEBUG LOG] {data.ToString()}");
-
             }
         }
     }
@@ -119,257 +118,6 @@ namespace vMenuServer
             "HALLOWEEN"
         };
 
-        public List<string> aceNames = new List<string>()
-        {
-            // Global
-            "Everything",
-            "DontKickMe",
-            "NoClip",
-            "Staff",
-
-            // Online Players
-            "OPMenu",
-            "OPAll",
-            "OPTeleport",
-            "OPWaypoint",
-            "OPSpectate",
-            "OPSummon",
-            "OPKill",
-            "OPKick",
-            "OPPermBan",
-            "OPTempBan",
-            "OPUnban",
-
-            // Player Options
-            "POMenu",
-            "POAll",
-            "POGod",
-            "POInvisible",
-            "POFastRun",
-            "POFastSwim",
-            "POSuperjump",
-            "PONoRagdoll",
-            "PONeverWanted",
-            "POSetWanted",
-            "POIgnored",
-            "POMaxHealth",
-            "POMaxArmor",
-            "POCleanPlayer",
-            "PODryPlayer",
-            "POWetPlayer",
-            "POVehicleAutoPilotMenu",
-            "POFreeze",
-            "POScenarios",
-            "POUnlimitedStamina",
-
-            // Vehicle Options
-            "VOMenu",
-            "VOAll",
-            "VOGod",
-            "VOSpecialGod",
-            "VORepair",
-            "VOWash",
-            "VOEngine",
-            "VOChangePlate",
-            "VOMod",
-            "VOColors",
-            "VOLiveries",
-            "VOComponents",
-            "VODoors",
-            "VOWindows",
-            "VOFreeze",
-            "VOTorqueMultiplier",
-            "VOPowerMultiplier",
-            "VOFlip",
-            "VOAlarm",
-            "VOCycleSeats",
-            "VOEngineAlwaysOn",
-            "VONoSiren",
-            "VONoHelmet",
-            "VOLights",
-            "VODelete",
-            "VOUnderglow",
-            "VOFlashHighbeamsOnHonk",
-            
-            // Vehicle Spawner
-            "VSMenu",
-            "VSAll",
-            "VSDisableReplacePrevious",
-            "VSSpawnByName",
-            "VSAddon",
-            "VSCompacts",
-            "VSSedans",
-            "VSSUVs",
-            "VSCoupes",
-            "VSMuscle",
-            "VSSportsClassic",
-            "VSSports",
-            "VSSuper",
-            "VSMotorcycles",
-            "VSOffRoad",
-            "VSIndustrial",
-            "VSUtility",
-            "VSVans",
-            "VSCycles",
-            "VSBoats",
-            "VSHelicopters",
-            "VSPlanes",
-            "VSService",
-            "VSEmergency",
-            "VSMilitary",
-            "VSCommercial",
-            "VSTrains",
-
-            // Saved Vehicles
-            "SVMenu",
-            "SVAll",
-            "SVSpawn",
-
-            // Player Appearance
-            "PAMenu",
-            "PAAll",
-            "PACustomize",
-            "PASpawnSaved",
-            "PASpawnNew",
-
-            // Time Options
-            "TOMenu",
-            "TOAll",
-            "TOFreezeTime",
-            "TOSetTime",
-
-            // Weather Options
-            "WOMenu",
-            "WOAll",
-            "WODynamic",
-            "WOBlackout",
-            "WOSetWeather",
-            "WORemoveClouds",
-            "WORandomizeClouds",
-
-            // Weapon Options
-            "WPMenu",
-            "WPAll",
-            "WPGetAll",
-            "WPRemoveAll",
-            "WPUnlimitedAmmo",
-            "WPNoReload",
-            "WPSpawn",
-            "WPSpawnByName",
-            "WPSetAllAmmo",
-            
-            // Weapons Permissions
-            "WPSniperRifle",
-            "WPFireExtinguisher",
-            "WPCompactGrenadeLauncher",
-            "WPSnowball",
-            "WPVintagePistol",
-            "WPCombatPDW",
-            "WPHeavySniperMk2",
-            "WPHeavySniper",
-            "WPSweeperShotgun",
-            "WPMicroSMG",
-            "WPWrench",
-            "WPPistol",
-            "WPPumpShotgun",
-            "WPAPPistol",
-            "WPBall",
-            "WPMolotov",
-            "WPSMG",
-            "WPStickyBomb",
-            "WPPetrolCan",
-            "WPStunGun",
-            "WPAssaultRifleMk2",
-            "WPHeavyShotgun",
-            "WPMinigun",
-            "WPGolfClub",
-            "WPFlareGun",
-            "WPFlare",
-            "WPGrenadeLauncherSmoke",
-            "WPHammer",
-            "WPCombatPistol",
-            "WPGusenberg",
-            "WPCompactRifle",
-            "WPHomingLauncher",
-            "WPNightstick",
-            "WPRailgun",
-            "WPSawnOffShotgun",
-            "WPSMGMk2",
-            "WPBullpupRifle",
-            "WPFirework",
-            "WPCombatMG",
-            "WPCarbineRifle",
-            "WPCrowbar",
-            "WPFlashlight",
-            "WPDagger",
-            "WPGrenade",
-            "WPPoolCue",
-            "WPBat",
-            "WPPistol50",
-            "WPKnife",
-            "WPMG",
-            "WPBullpupShotgun",
-            "WPBZGas",
-            "WPUnarmed",
-            "WPGrenadeLauncher",
-            "WPNightVision",
-            "WPMusket",
-            "WPProximityMine",
-            "WPAdvancedRifle",
-            "WPRPG",
-            "WPPipeBomb",
-            "WPMiniSMG",
-            "WPSNSPistol",
-            "WPPistolMk2",
-            "WPAssaultRifle",
-            "WPSpecialCarbine",
-            "WPRevolver",
-            "WPMarksmanRifle",
-            "WPBattleAxe",
-            "WPHeavyPistol",
-            "WPKnuckleDuster",
-            "WPMachinePistol",
-            "WPCombatMGMk2",
-            "WPMarksmanPistol",
-            "WPMachete",
-            "WPSwitchBlade",
-            "WPAssaultShotgun",
-            "WPDoubleBarrelShotgun",
-            "WPAssaultSMG",
-            "WPHatchet",
-            "WPBottle",
-            "WPCarbineRifleMk2",
-            "WPParachute",
-            "WPSmokeGrenade",
-
-            // Misc Settings
-            "MSAll",
-            "MSClearArea",
-            "MSTeleportToWp",
-            "MSShowCoordinates",
-            "MSShowLocation",
-            "MSJoinQuitNotifs",
-            "MSDeathNotifs",
-            "MSNightVision",
-            "MSThermalVision",
-            "MSLocationBlips",
-            "MSPlayerBlips",
-            "MSTeleportLocations",
-            "MSConnectionMenu",
-            "MSRestoreAppearance",
-            "MSRestoreWeapons",
-
-            // Voice Chat
-            "VCMenu",
-            "VCAll",
-            "VCEnable",
-            "VCShowSpeaker",
-            "VCStaffChannel",
-        };
-        public List<string> addonVehicles = new List<string>();
-        public List<string> addonPeds = new List<string>();
-        public List<string> addonWeapons = new List<string>();
-
         #region Constructor
         /// <summary>
         /// Constructor.
@@ -391,7 +139,7 @@ namespace vMenuServer
                             }
                             else
                             {
-                                new PlayerList()[source].TriggerEvent("chatMessage", $"vMenu Debug mode is now set to: {DebugMode}.");
+                                Players[source].TriggerEvent("chatMessage", $"vMenu Debug mode is now set to: {DebugMode}.");
                             }
                             return;
                         }
@@ -557,48 +305,23 @@ namespace vMenuServer
             }
             else
             {
-                //InitializeConfig();
                 // Add event handlers.
                 EventHandlers.Add("vMenu:SummonPlayer", new Action<Player, int>(SummonPlayer));
                 EventHandlers.Add("vMenu:KillPlayer", new Action<Player, int>(KillPlayer));
                 EventHandlers.Add("vMenu:KickPlayer", new Action<Player, int, string>(KickPlayer));
-                EventHandlers.Add("vMenu:RequestPermissions", new Action<Player>(SendPermissionsAsync));
+                EventHandlers.Add("vMenu:RequestPermissions", new Action<Player>(vMenuShared.PermissionsManager.SetPermissionsForPlayer));
                 EventHandlers.Add("vMenu:UpdateServerWeather", new Action<string, bool, bool>(UpdateWeather));
                 EventHandlers.Add("vMenu:UpdateServerWeatherCloudsType", new Action<bool>(UpdateWeatherCloudsType));
                 EventHandlers.Add("vMenu:UpdateServerTime", new Action<int, int, bool>(UpdateTime));
                 EventHandlers.Add("vMenu:DisconnectSelf", new Action<Player>(DisconnectSource));
                 EventHandlers.Add("vMenu:ClearArea", new Action<float, float, float>(ClearAreaNearPos));
+                EventHandlers.Add("vMenu:GetPlayerIdentifiers", new Action<int, NetworkCallbackDelegate>((TargetPlayer, CallbackFunction) => { CallbackFunction(JsonConvert.SerializeObject(Players[TargetPlayer].Identifiers)); }));
 
-                string addons = LoadResourceFile(GetCurrentResourceName(), "addons.json") ?? LoadResourceFile(GetCurrentResourceName(), "config/addons.json") ?? "{}";
+                string addons = LoadResourceFile(GetCurrentResourceName(), "config/addons.json") ?? "{}";
                 try
                 {
-                    Dictionary<string, List<string>> json = JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(addons);
-                    if (json.ContainsKey("vehicles"))
-                    {
-                        foreach (var modelName in json["vehicles"])
-                        {
-                            Log("Addon vehicle loaded: " + modelName);
-                            addonVehicles.Add(modelName);
-                        }
-                    }
-
-                    if (json.ContainsKey("peds"))
-                    {
-                        foreach (var modelName in json["peds"])
-                        {
-                            Log("Addon ped loaded:" + modelName);
-                            addonPeds.Add(modelName);
-                        }
-                    }
-
-                    if (json.ContainsKey("weapons"))
-                    {
-                        foreach (var modelName in json["weapons"])
-                        {
-                            Log("Addon weapon loaded:" + modelName);
-                            addonWeapons.Add(modelName);
-                        }
-                    }
+                    JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(addons);
+                    // If the above crashes, then the json is invalid and it'll throw warnings in the console.
                 }
                 catch (JsonReaderException ex)
                 {
@@ -611,8 +334,6 @@ namespace vMenuServer
                 {
                     dynamicWeatherMinutes = GetSettingsInt(Setting.vmenu_dynamic_weather_timer);
                 }
-
-
 
                 string defaultWeather = GetSettingsString(Setting.vmenu_default_weather);
 
@@ -628,7 +349,6 @@ namespace vMenuServer
                 currentHours = (currentHours >= 0 && currentHours < 24) ? currentHours : 9;
                 currentMinutes = GetSettingsInt(Setting.vmenu_default_time_min);
                 currentMinutes = (currentMinutes >= 0 && currentMinutes < 60) ? currentMinutes : 0;
-
 
                 minuteClockSpeed = GetSettingsInt(Setting.vmenu_ingame_minute_duration);
                 minuteClockSpeed = (minuteClockSpeed > 0) ? minuteClockSpeed : 2000;
@@ -871,7 +591,7 @@ namespace vMenuServer
                 IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.All"))
             {
                 // If the player is allowed to be kicked.
-                Player targetPlayer = new PlayerList()[target];
+                Player targetPlayer = Players[target];
                 if (targetPlayer != null)
                 {
                     if (!IsPlayerAceAllowed(targetPlayer.Handle, "vMenu.DontKickMe"))
@@ -907,11 +627,11 @@ namespace vMenuServer
             if (IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.Kill") || IsPlayerAceAllowed(source.Handle, "vMenu.Everything") ||
                 IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.All"))
             {
-                Player targetPlayer = new PlayerList()[target];
+                Player targetPlayer = Players[target];
                 if (targetPlayer != null)
                 {
                     // Trigger the client event on the target player to make them kill themselves. R.I.P.
-                    TriggerClientEvent(player: targetPlayer, eventName: "vMenu:KillMe");
+                    TriggerClientEvent(player: targetPlayer, eventName: "vMenu:KillMe", args: source.Name);
                     return;
                 }
                 TriggerClientEvent(player: source, eventName: "vMenu:Notify", args: "An unknown error occurred. Report it here: vespura.com/vmenu");
@@ -933,7 +653,7 @@ namespace vMenuServer
                 IsPlayerAceAllowed(source.Handle, "vMenu.OnlinePlayers.All"))
             {
                 // Trigger the client event on the target player to make them teleport to the source player.
-                Player targetPlayer = new PlayerList()[target];
+                Player targetPlayer = Players[target];
                 if (targetPlayer != null)
                 {
                     TriggerClientEvent(player: targetPlayer, eventName: "vMenu:GoToPlayer", args: source.Handle);
@@ -945,97 +665,6 @@ namespace vMenuServer
             {
                 BanManager.BanCheater(source);
             }
-        }
-        #endregion
-
-        #region Send Permissions & Settings to the requesting client
-        /// <summary>
-        /// Send the permissions to the client that requested it.
-        /// </summary>
-        /// <param name="player"></param>
-        private async void SendPermissionsAsync([FromSource] Player player)
-        {
-
-            // Get Permissions
-            Dictionary<string, bool> perms = new Dictionary<string, bool>();
-            foreach (string ace in aceNames)
-            {
-                var realAceName = GetRealAceName(ace);
-                var allowed = IsPlayerAceAllowed(player.Handle, realAceName);
-                perms.Add(ace, allowed);
-            }
-
-
-            player.TriggerEvent("vMenu:ConfigureClient", addonVehicles, addonPeds, addonWeapons, perms);
-
-
-            while (!UpdateChecker.CheckedForUpdates)
-            {
-                await Delay(0);
-            }
-            if (!UpToDate)
-            {
-                TriggerClientEvent(player, "vMenu:OutdatedResource");
-            }
-            await Delay(8000);
-            TriggerClientEvent("vMenu:updatePedDecors");
-        }
-
-        private string GetRealAceName(string inputString)
-        {
-            string outputString = inputString;
-            var prefix = inputString.Substring(0, 2);
-
-            if (prefix == "OP")
-            {
-                outputString = "vMenu.OnlinePlayers." + inputString.Substring(2);
-            }
-            else if (prefix == "PO")
-            {
-                outputString = "vMenu.PlayerOptions." + inputString.Substring(2);
-            }
-            else if (prefix == "VO")
-            {
-                outputString = "vMenu.VehicleOptions." + inputString.Substring(2);
-            }
-            else if (prefix == "VS")
-            {
-                outputString = "vMenu.VehicleSpawner." + inputString.Substring(2);
-            }
-            else if (prefix == "SV")
-            {
-                outputString = "vMenu.SavedVehicles." + inputString.Substring(2);
-            }
-            else if (prefix == "PA")
-            {
-                outputString = "vMenu.PlayerAppearance." + inputString.Substring(2);
-            }
-            else if (prefix == "TO")
-            {
-                outputString = "vMenu.TimeOptions." + inputString.Substring(2);
-            }
-            else if (prefix == "WO")
-            {
-                outputString = "vMenu.WeatherOptions." + inputString.Substring(2);
-            }
-            else if (prefix == "WP")
-            {
-                outputString = "vMenu.WeaponOptions." + inputString.Substring(2);
-            }
-            else if (prefix == "MS")
-            {
-                outputString = "vMenu.MiscSettings." + inputString.Substring(2);
-            }
-            else if (prefix == "VC")
-            {
-                outputString = "vMenu.VoiceChat." + inputString.Substring(2);
-            }
-            else
-            {
-                outputString = "vMenu." + inputString;
-            }
-
-            return outputString;
         }
         #endregion
 

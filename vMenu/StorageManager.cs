@@ -4,14 +4,18 @@ using System.Dynamic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using CitizenFX.Core;
-using static CitizenFX.Core.Native.API;
+using MenuAPI;
 using Newtonsoft.Json;
+using CitizenFX.Core;
+using static CitizenFX.Core.UI.Screen;
+using static CitizenFX.Core.Native.API;
+using static vMenuClient.CommonFunctions;
+using static vMenuShared.PermissionsManager;
 
 namespace vMenuClient
 {
 
-    public class StorageManager : BaseScript
+    public static class StorageManager
     {
         /// <summary>
         /// Save Dictionary(string, string) to local storage.
@@ -21,15 +25,15 @@ namespace vMenuClient
         /// <param name="overrideExistingData">When true, will override existing save data with the same name. 
         /// If false, it will cancel the save if existing data is found and return false.</param>
         /// <returns>A boolean value indicating if the save was successful.</returns>
-        public bool SaveDictionary(string saveName, Dictionary<string, string> data, bool overrideExistingData)
+        public static bool SaveDictionary(string saveName, Dictionary<string, string> data, bool overrideExistingData)
         {
             // If the savename doesn't exist yet or we're allowed to override it.
             if (GetResourceKvpString(saveName) == null || overrideExistingData)
             {
                 // Get the json string from the dictionary.
-                //string jsonString = MainMenu.Cf.DictionaryToJson(data);
+                //string jsonString = CommonFunctions.DictionaryToJson(data);
                 string jsonString = JsonConvert.SerializeObject(data);
-                MainMenu.Cf.Log($"Saving: [name: {saveName}, json:{jsonString}]");
+                Log($"Saving: [name: {saveName}, json:{jsonString}]");
 
                 // Save the kvp.
                 SetResourceKvp(saveName, jsonString);
@@ -45,25 +49,23 @@ namespace vMenuClient
         }
 
         /// <summary>
-        /// Get a saved dictionary. (Used for saving peds)
+        /// Returns a <see cref="PedInfo"/> struct containing the data of the saved ped.
         /// </summary>
-        /// <param name="name">The key for the dictionary to get.</param>
-        /// <returns>The requested dictionary.</returns>
-        public Dictionary<string, string> GetSavedDictionary(string name)
+        /// <param name="name"></param>
+        /// <returns></returns>
+        public static PedInfo GetSavedPedInfo(string name)
         {
-            string json;
-            json = GetResourceKvpString(name);
-            MainMenu.Cf.Log("Existing v2 save is being loaded: Name: " + name + " Dict: " + json.ToString());
-            var dict = MainMenu.Cf.JsonToDictionary(json);
-            return dict ?? new Dictionary<string, string>();
+            return JsonToPedInfo(GetResourceKvpString(name), name);
         }
 
-        public CommonFunctions.PedInfo GetSavedPedInfo(string name)
-        {
-            return MainMenu.Cf.JsonToPedInfo(GetResourceKvpString(name), name);
-        }
-
-        public bool SavePedInfo(string saveName, CommonFunctions.PedInfo pedData, bool overrideExisting)
+        /// <summary>
+        /// Saves an (old/nomral) ped data to storage.
+        /// </summary>
+        /// <param name="saveName"></param>
+        /// <param name="pedData"></param>
+        /// <param name="overrideExisting"></param>
+        /// <returns></returns>
+        public static bool SavePedInfo(string saveName, PedInfo pedData, bool overrideExisting)
         {
             if (overrideExisting || (GetResourceKvpString(saveName) ?? "NULL") == "NULL")
             {
@@ -78,7 +80,7 @@ namespace vMenuClient
         /// Delete the specified saved item from local storage.
         /// </summary>
         /// <param name="saveName">The full name of the item to remove.</param>
-        public void DeleteSavedStorageItem(string saveName)
+        public static void DeleteSavedStorageItem(string saveName)
         {
             DeleteResourceKvp(saveName);
         }
@@ -90,22 +92,20 @@ namespace vMenuClient
         /// <param name="vehicleInfo"></param>
         /// <param name="overrideOldVersion"></param>
         /// <returns></returns>
-        public static bool SaveVehicleInfo(string saveName, CommonFunctions.VehicleInfo vehicleInfo, bool overrideOldVersion)
+        public static bool SaveVehicleInfo(string saveName, VehicleInfo vehicleInfo, bool overrideOldVersion)
         {
-            if ((GetResourceKvpString(saveName) ?? "NULL") == "NULL" || overrideOldVersion)
+            if (string.IsNullOrEmpty(GetResourceKvpString(saveName)) || overrideOldVersion)
             {
-                if ((saveName ?? "NULL") != "NULL" && saveName.Length > 4)
+                if (!string.IsNullOrEmpty(saveName) && saveName.Length > 4)
                 {
                     // convert
                     string json = JsonConvert.SerializeObject(vehicleInfo);
 
                     // log
-                    MainMenu.Cf.Log($"[vMenu] Saving!\nName: {saveName}\nVehicle Data: {json}\n");
+                    Log($"[vMenu] Saving!\nName: {saveName}\nVehicle Data: {json}\n");
 
                     // save
                     SetResourceKvp(saveName, json);
-                    //Debug.WriteLine(GetResourceKvpString(saveName).ToString());
-                    //Debug.WriteLine(saveName);
 
                     // confirm
                     return GetResourceKvpString(saveName) == json;
@@ -120,117 +120,118 @@ namespace vMenuClient
         /// </summary>
         /// <param name="saveName">Saved vehicle name to get info from. (name includes "veh_")</param>
         /// <returns></returns>
-        public CommonFunctions.VehicleInfo GetSavedVehicleInfo(string saveName)
+        public static VehicleInfo GetSavedVehicleInfo(string saveName)
         {
             string json = GetResourceKvpString(saveName);
-            var vi = new CommonFunctions.VehicleInfo() { };
-            dynamic data = JsonConvert.DeserializeObject(json);
-            if (data.ContainsKey("version"))
-            {
-                //MainMenu.Cf.Log("New Version: " + data["version"] + "\n");
-                var colors = new Dictionary<string, int>();
-                foreach (Newtonsoft.Json.Linq.JProperty c in data["colors"])
-                {
-                    colors.Add(c.Name, (int)c.Value);
-                }
-                vi.colors = colors;
-                vi.customWheels = (bool)data["customWheels"];
-                var extras = new Dictionary<int, bool>();
-                foreach (Newtonsoft.Json.Linq.JProperty e in data["extras"])
-                {
-                    extras.Add(int.Parse(e.Name), (bool)e.Value);
-                }
-                vi.extras = extras;
-                vi.livery = (int)data["livery"];
-                vi.model = (uint)data["model"];
-                var mods = new Dictionary<int, int>();
-                foreach (Newtonsoft.Json.Linq.JProperty m in data["mods"])
-                {
-                    mods.Add(int.Parse(m.Name.ToString()), (int)m.Value);
-                }
-                vi.mods = mods;
-                vi.name = (string)data["name"];
-                vi.neonBack = (bool)data["neonBack"];
-                vi.neonFront = (bool)data["neonFront"];
-                vi.neonLeft = (bool)data["neonLeft"];
-                vi.neonRight = (bool)data["neonRight"];
-                vi.plateStyle = (int)data["plateStyle"];
-                vi.plateText = (string)data["plateText"];
-                vi.turbo = (bool)data["turbo"];
-                vi.tyreSmoke = (bool)data["tyreSmoke"];
-                vi.version = (int)data["version"];
-                vi.wheelType = (int)data["wheelType"];
-                vi.windowTint = (int)data["windowTint"];
-                vi.xenonHeadlights = (bool)data["xenonHeadlights"];
-            }
-            else
-            {
-                //MainMenu.Cf.Log("Old: " + json + "\n");
-                var dict = MainMenu.Cf.JsonToDictionary(json);
-                var colors = new Dictionary<string, int>()
-                {
-                    ["primary"] = int.Parse(dict["primaryColor"]),
-                    ["secondary"] = int.Parse(dict["secondaryColor"]),
-                    ["pearlescent"] = int.Parse(dict["pearlescentColor"]),
-                    ["wheels"] = int.Parse(dict["wheelsColor"]),
-                    ["dash"] = int.Parse(dict["dashboardColor"]),
-                    ["trim"] = int.Parse(dict["interiorColor"]),
-                    ["neonR"] = 255,
-                    ["neonG"] = 255,
-                    ["neonB"] = 255,
-                    ["tyresmokeR"] = int.Parse(dict["tireSmokeR"]),
-                    ["tyresmokeG"] = int.Parse(dict["tireSmokeG"]),
-                    ["tyresmokeB"] = int.Parse(dict["tireSmokeB"]),
-                };
-                var extras = new Dictionary<int, bool>();
-                for (int i = 0; i < 15; i++)
-                {
-                    if (dict["extra" + i] == "true")
-                    {
-                        extras.Add(i, true);
-                    }
-                    else
-                    {
-                        extras.Add(i, false);
-                    }
-                }
+            return JsonConvert.DeserializeObject<VehicleInfo>(json);
+            //var vi = new VehicleInfo() { };
+            //dynamic data = JsonConvert.DeserializeObject(json);
+            //if (data.ContainsKey("version"))
+            //{
+            //    //CommonFunctions.Log("New Version: " + data["version"] + "\n");
+            //    var colors = new Dictionary<string, int>();
+            //    foreach (Newtonsoft.Json.Linq.JProperty c in data["colors"])
+            //    {
+            //        colors.Add(c.Name, (int)c.Value);
+            //    }
+            //    vi.colors = colors;
+            //    vi.customWheels = (bool)data["customWheels"];
+            //    var extras = new Dictionary<int, bool>();
+            //    foreach (Newtonsoft.Json.Linq.JProperty e in data["extras"])
+            //    {
+            //        extras.Add(int.Parse(e.Name), (bool)e.Value);
+            //    }
+            //    vi.extras = extras;
+            //    vi.livery = (int)data["livery"];
+            //    vi.model = (uint)data["model"];
+            //    var mods = new Dictionary<int, int>();
+            //    foreach (Newtonsoft.Json.Linq.JProperty m in data["mods"])
+            //    {
+            //        mods.Add(int.Parse(m.Name.ToString()), (int)m.Value);
+            //    }
+            //    vi.mods = mods;
+            //    vi.name = (string)data["name"];
+            //    vi.neonBack = (bool)data["neonBack"];
+            //    vi.neonFront = (bool)data["neonFront"];
+            //    vi.neonLeft = (bool)data["neonLeft"];
+            //    vi.neonRight = (bool)data["neonRight"];
+            //    vi.plateStyle = (int)data["plateStyle"];
+            //    vi.plateText = (string)data["plateText"];
+            //    vi.turbo = (bool)data["turbo"];
+            //    vi.tyreSmoke = (bool)data["tyreSmoke"];
+            //    vi.version = (int)data["version"];
+            //    vi.wheelType = (int)data["wheelType"];
+            //    vi.windowTint = (int)data["windowTint"];
+            //    vi.xenonHeadlights = (bool)data["xenonHeadlights"];
+            //}
+            //else
+            //{
+            //    //CommonFunctions.Log("Old: " + json + "\n");
+            //    var dict = JsonToDictionary(json);
+            //    var colors = new Dictionary<string, int>()
+            //    {
+            //        ["primary"] = int.Parse(dict["primaryColor"]),
+            //        ["secondary"] = int.Parse(dict["secondaryColor"]),
+            //        ["pearlescent"] = int.Parse(dict["pearlescentColor"]),
+            //        ["wheels"] = int.Parse(dict["wheelsColor"]),
+            //        ["dash"] = int.Parse(dict["dashboardColor"]),
+            //        ["trim"] = int.Parse(dict["interiorColor"]),
+            //        ["neonR"] = 255,
+            //        ["neonG"] = 255,
+            //        ["neonB"] = 255,
+            //        ["tyresmokeR"] = int.Parse(dict["tireSmokeR"]),
+            //        ["tyresmokeG"] = int.Parse(dict["tireSmokeG"]),
+            //        ["tyresmokeB"] = int.Parse(dict["tireSmokeB"]),
+            //    };
+            //    var extras = new Dictionary<int, bool>();
+            //    for (int i = 0; i < 15; i++)
+            //    {
+            //        if (dict["extra" + i] == "true")
+            //        {
+            //            extras.Add(i, true);
+            //        }
+            //        else
+            //        {
+            //            extras.Add(i, false);
+            //        }
+            //    }
 
-                var mods = new Dictionary<int, int>();
-                int skip = 8 + 24 + 2 + 1;
-                foreach (var mod in dict)
-                {
-                    skip--;
-                    if (skip < 0)
-                    {
-                        var key = int.Parse(mod.Key);
-                        var val = int.Parse(mod.Value);
-                        mods.Add(key, val);
-                    }
-                }
+            //    var mods = new Dictionary<int, int>();
+            //    int skip = 8 + 24 + 2 + 1;
+            //    foreach (var mod in dict)
+            //    {
+            //        skip--;
+            //        if (skip < 0)
+            //        {
+            //            var key = int.Parse(mod.Key);
+            //            var val = int.Parse(mod.Value);
+            //            mods.Add(key, val);
+            //        }
+            //    }
 
-                vi.colors = colors;
-                vi.customWheels = dict["customWheels"] == "true";
-                vi.extras = extras;
-                vi.livery = int.Parse(dict["oldLivery"]);
-                vi.model = (uint)Int64.Parse(dict["model"]);
-                vi.mods = mods;
-                vi.name = dict["name"];
-                vi.neonBack = false;
-                vi.neonFront = false;
-                vi.neonLeft = false;
-                vi.neonRight = false;
-                vi.plateStyle = int.Parse(dict["plateStyle"]);
-                vi.plateText = dict["plate"];
-                vi.turbo = dict["turbo"] == "true";
-                vi.tyreSmoke = dict["tireSmoke"] == "true";
-                vi.version = 1;
-                vi.wheelType = int.Parse(dict["wheelType"]);
-                vi.windowTint = int.Parse(dict["windowTint"]);
-                vi.xenonHeadlights = dict["xenonHeadlights"] == "true";
-                SaveVehicleInfo(saveName, vi, true);
-            }
-            //MainMenu.Cf.Log(json + "\n");
-            return vi;
+            //    vi.colors = colors;
+            //    vi.customWheels = dict["customWheels"] == "true";
+            //    vi.extras = extras;
+            //    vi.livery = int.Parse(dict["oldLivery"]);
+            //    vi.model = (uint)Int64.Parse(dict["model"]);
+            //    vi.mods = mods;
+            //    vi.name = dict["name"];
+            //    vi.neonBack = false;
+            //    vi.neonFront = false;
+            //    vi.neonLeft = false;
+            //    vi.neonRight = false;
+            //    vi.plateStyle = int.Parse(dict["plateStyle"]);
+            //    vi.plateText = dict["plate"];
+            //    vi.turbo = dict["turbo"] == "true";
+            //    vi.tyreSmoke = dict["tireSmoke"] == "true";
+            //    vi.version = 1;
+            //    vi.wheelType = int.Parse(dict["wheelType"]);
+            //    vi.windowTint = int.Parse(dict["windowTint"]);
+            //    vi.xenonHeadlights = dict["xenonHeadlights"] == "true";
+            //    SaveVehicleInfo(saveName, vi, true);
+            //}
+            ////CommonFunctions.Log(json + "\n");
+            //return vi;
         }
 
         /// <summary>
@@ -240,7 +241,7 @@ namespace vMenuClient
         /// <param name="jsonData">The data to store.</param>
         /// <param name="overrideExistingData">If the saveName is already in use, can we override it?</param>
         /// <returns>Whether or not the data was saved successfully.</returns>
-        public bool SaveJsonData(string saveName, string jsonData, bool overrideExistingData)
+        public static bool SaveJsonData(string saveName, string jsonData, bool overrideExistingData)
         {
             if (!string.IsNullOrEmpty(saveName) && !string.IsNullOrEmpty(jsonData))
             {
@@ -268,7 +269,7 @@ namespace vMenuClient
         /// </summary>
         /// <param name="saveName"></param>
         /// <returns></returns>
-        public string GetJsonData(string saveName)
+        public static string GetJsonData(string saveName)
         {
             if (!string.IsNullOrEmpty(saveName))
             {
@@ -281,6 +282,35 @@ namespace vMenuClient
                 }
             }
             return null;
+        }
+
+        /// <summary>
+        /// Returns a <see cref="MpPedDataManager.MultiplayerPedData"/> struct containing the data of the saved MP Character.
+        /// </summary>
+        /// <param name="name"></param>
+        /// <returns></returns>
+        public static MpPedDataManager.MultiplayerPedData GetSavedMpCharacterData(string name)
+        {
+            var output = new MpPedDataManager.MultiplayerPedData();
+            if (string.IsNullOrEmpty(name))
+            {
+                return output;
+            }
+            string jsonString = GetResourceKvpString(name.StartsWith("mp_ped_") ? name : "mp_ped_" + name);
+            if (string.IsNullOrEmpty(jsonString))
+            {
+                return output;
+            }
+            try
+            {
+                output = JsonConvert.DeserializeObject<MpPedDataManager.MultiplayerPedData>(jsonString);
+            }
+            catch (JsonException e)
+            {
+                Debug.WriteLine(e.Message);
+            }
+            Log(jsonString);
+            return output;
         }
     }
 }

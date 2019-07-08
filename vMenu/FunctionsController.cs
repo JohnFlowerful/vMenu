@@ -12,6 +12,7 @@ using static CitizenFX.Core.Native.API;
 using static vMenuClient.CommonFunctions;
 using static vMenuShared.ConfigManager;
 using static vMenuShared.PermissionsManager;
+using static vMenuClient.data.PedModels;
 
 namespace vMenuClient
 {
@@ -25,7 +26,6 @@ namespace vMenuClient
         private bool SwitchedVehicle = false;
         private Dictionary<int, string> playerList = new Dictionary<int, string>();
         private List<int> deadPlayers = new List<int>();
-        //private Menu lastOpenMenu = null;
         private float cameraRotationHeading = 0f;
 
         // show location variables
@@ -34,11 +34,9 @@ namespace vMenuClient
         private bool node = false;
         private float heading = 0f;
         private float safeZoneSizeX = (1 / GetSafeZoneSize() / 3.0f) - 0.358f;
-        private float safeZoneSizeY = (1 / GetSafeZoneSize() / 3.6f) - 0.27f;
         private uint crossing = 1;
         private string crossingName = "";
         private string suffix = "";
-        //private bool wasMenuJustOpen = false;
         private List<int> waypointPlayerIdsToRemove = new List<int>();
         private int voiceTimer = 0;
         private int voiceCycle = 1;
@@ -55,11 +53,16 @@ namespace vMenuClient
         private bool showSnowballInfo = false;
 
         /// I made these seperate bools that only get set once after initial load 
-        /// to prevent the CommonFunctions.IsAllowed() function being called over and over again multiple times every tick. 
-        /// Values are set in <see cref="EventManager.ConfigureClient(dynamic, dynamic, dynamic, dynamic)"/>
-        public static bool flaresAllowed = false;
-        public static bool bombsAllowed = false;
+        /// to prevent the CommonFunctions.IsAllowed() function being called over and over again multiple times every tick.
+        //public static bool flaresAllowed = false;
+        //public static bool bombsAllowed = false;
 
+        private bool stopPropsLoop = false;
+        private bool stopVehiclesLoop = false;
+        private bool stopPedsLoop = false;
+        private List<Prop> props = new List<Prop>();
+        private List<Vehicle> vehicles = new List<Vehicle>();
+        private List<Ped> peds = new List<Ped>();
 
         /// <summary>
         /// Constructor.
@@ -72,33 +75,47 @@ namespace vMenuClient
                 playerList.Add(p.Handle, p.Name);
             }
 
-            // Add all tick events.
+            // Add all tick functions.
+            Tick += GcTick;
             Tick += GeneralTasks;
             Tick += PlayerOptions;
+            Tick += DoPlayerAndVehicleChecks;
             Tick += VehicleOptions;
+            Tick += VehicleOptionsEveryFrame;
             Tick += MoreVehicleOptions;
             Tick += VoiceChat;
             Tick += TimeOptions;
-            Tick += _WeatherOptions;
+            Tick += WeatherOptions;
             Tick += WeaponOptions;
             Tick += OnlinePlayersTasks;
-
             Tick += MiscSettings;
+            Tick += MiscRecordingKeybinds;
             Tick += DeathNotifications;
             Tick += JoinQuitNotifications;
             Tick += UpdateLocation;
-            Tick += ManagePlayerAppearanceCamera;
+            Tick += ManageCamera;
             Tick += PlayerBlipsControl;
+            Tick += PlayerOverheadNamesControl;
             Tick += RestorePlayerAfterBeingDead;
             Tick += PlayerClothingAnimationsController;
-            //Tick += FlaresAndBombsTick;
             Tick += AnimationsAndInteractions;
             Tick += HelpMessageController;
             Tick += ModelDrawDimensions;
-            Tick += GcTick;
+            Tick += PersonalVehicleOptions;
+            Tick += AnimalPedCameraChangeBlocker;
+            Tick += SlowMiscTick;
+
+
+            //Tick += FlaresAndBombsTick;
         }
 
+        /// Task related
+        #region gc thread
         int gcTimer = GetGameTimer();
+        /// <summary>
+        /// Task for clearing unused memory periodically.
+        /// </summary>
+        /// <returns></returns>
         private async Task GcTick()
         {
             if (GetGameTimer() - gcTimer > 60000)
@@ -110,18 +127,20 @@ namespace vMenuClient
             }
             await Delay(1000);
         }
+        #endregion
 
-        /// Task related
         #region General Tasks
+        int lastProp = -1;
+        int lastPropTexture = 0;
         /// <summary>
-        /// All general tasks that run every game tick (and are not (sub)menu specific).
+        /// All general tasks that run every 1 game ticks (and are not (sub)menu specific).
         /// </summary>
         /// <returns></returns>
         private async Task GeneralTasks()
         {
             // CommonFunctions is required, if it doesn't exist then we won't execute the checks.
             // Check if the player has switched to a new vehicle.
-            if (IsPedInAnyVehicle(Game.PlayerPed.Handle, true)) // added this for improved performance.
+            if (Game.PlayerPed.IsInVehicle()) // added this for improved performance.
             {
                 var tmpVehicle = GetVehicle();
                 if (tmpVehicle != null && tmpVehicle.Exists() && tmpVehicle.Handle != LastVehicle)
@@ -130,18 +149,36 @@ namespace vMenuClient
                     LastVehicle = tmpVehicle.Handle;
                     SwitchedVehicle = true;
                 }
-            }
-
-            if (MenuController.IsAnyMenuOpen())
-            {
-                if (UpdateOnscreenKeyboard() == 0)
+                if (lastProp > -1 && GetPedPropIndex(Game.PlayerPed.Handle, 0) != lastProp)
                 {
-                    await Delay(0);
-                    MenuController.CloseAllMenus();
+                    SetPedPropIndex(Game.PlayerPed.Handle, 0, lastProp, lastPropTexture, true);
+                    lastProp = -1;
+                    lastPropTexture = 0;
                 }
             }
+            else
+            {
+                if (Game.PlayerPed.IsGettingIntoAVehicle && !Game.PlayerPed.IsInVehicle()) // if they are (attempting to) get into a vehicle but they're not in yet.
+                {
+                    int prop = GetPedPropIndex(Game.PlayerPed.Handle, 0);
+                    int propTexture = GetPedPropTextureIndex(Game.PlayerPed.Handle, 0);
+                    if (prop > -1)
+                    {
+                        lastProp = prop;
+                        lastPropTexture = propTexture;
+                    }
+                    else
+                    {
+                        lastProp = -1;
+                        lastPropTexture = 0;
+                    }
+                }
+            }
+            // this can wait 1 ms
+            await Delay(1);
         }
         #endregion
+
         #region Player Options Tasks
         /// <summary>
         /// Run all tasks for the Player Options menu.
@@ -150,7 +187,7 @@ namespace vMenuClient
         private async Task PlayerOptions()
         {
             // Player options. Only run player options if the player options menu has actually been created.
-            if (MainMenu.PlayerOptionsMenu != null && IsAllowed(Permission.POMenu))
+            if (MainMenu.PermissionsSetupComplete && MainMenu.PlayerOptionsMenu != null && IsAllowed(Permission.POMenu))
             {
                 // perms
                 bool ignorePlayerAllowed = IsAllowed(Permission.POIgnored);
@@ -179,7 +216,6 @@ namespace vMenuClient
                     }
                 }
 
-
                 // Manage Super jump.
                 if (MainMenu.PlayerOptionsMenu.PlayerSuperJump && IsAllowed(Permission.POSuperjump))
                 {
@@ -191,30 +227,14 @@ namespace vMenuClient
                     (!noRagdollAllowed));
 
 
-                // Fall off bike / dragged out of car.
-                if (MainMenu.VehicleOptionsMenu != null)
-                {
-                    SetPedCanBeKnockedOffVehicle(Game.PlayerPed.Handle, (((MainMenu.PlayerOptionsMenu.PlayerNoRagdoll && noRagdollAllowed)
-                        || (MainMenu.VehicleOptionsMenu.VehicleGodMode) && vehicleGodModeAllowed) ? 1 : 0));
-
-                    SetPedCanBeDraggedOut(Game.PlayerPed.Handle, ((MainMenu.PlayerOptionsMenu.PlayerIsIgnored && ignorePlayerAllowed) ||
-                        (MainMenu.VehicleOptionsMenu.VehicleGodMode && vehicleGodModeAllowed) ||
-                        (MainMenu.PlayerOptionsMenu.PlayerGodMode && godmodeAllowed)));
-
-                    SetPedCanBeShotInVehicle(Game.PlayerPed.Handle, !((MainMenu.PlayerOptionsMenu.PlayerGodMode && godmodeAllowed) ||
-                        (MainMenu.VehicleOptionsMenu.VehicleGodMode && vehicleGodModeAllowed)));
-                }
-                else
-                {
-                    SetPedCanBeKnockedOffVehicle(Game.PlayerPed.Handle, ((MainMenu.PlayerOptionsMenu.PlayerNoRagdoll && noRagdollAllowed) ? 1 : 0));
-                    SetPedCanBeDraggedOut(Game.PlayerPed.Handle, (MainMenu.PlayerOptionsMenu.PlayerIsIgnored && ignorePlayerAllowed));
-                    SetPedCanBeShotInVehicle(Game.PlayerPed.Handle, !(MainMenu.PlayerOptionsMenu.PlayerGodMode && godmodeAllowed));
-                }
-
                 // Manage never wanted.
                 if (MainMenu.PlayerOptionsMenu.PlayerNeverWanted && GetPlayerWantedLevel(Game.Player.Handle) > 0 && IsAllowed(Permission.PONeverWanted))
                 {
                     ClearPlayerWantedLevel(Game.Player.Handle);
+                    if (GetMaxWantedLevel() > 0)
+                    {
+                        SetMaxWantedLevel(0);
+                    }
                 }
 
                 if (DriveToWpTaskActive && !Game.IsWaypointActive)
@@ -230,6 +250,49 @@ namespace vMenuClient
             }
         }
         #endregion
+
+        #region shared player options and vehicle options
+        /// <summary>
+        /// Slow tick that does some basic checks for shared vehicle/player options.
+        /// </summary>
+        /// <returns></returns>
+        private async Task DoPlayerAndVehicleChecks()
+        {
+            if (MainMenu.PermissionsSetupComplete)
+            {
+                bool god = IsAllowed(Permission.POGod) && MainMenu.PlayerOptionsMenu != null && MainMenu.PlayerOptionsMenu.PlayerGodMode;
+                await Delay(100);
+
+                bool vehGod = IsAllowed(Permission.VOGod) && MainMenu.VehicleOptionsMenu != null && MainMenu.VehicleOptionsMenu.VehicleGodMode;
+                await Delay(100);
+
+                //bool specGod = IsAllowed(Permission.VOSpecialGod) && MainMenu.VehicleOptionsMenu != null && MainMenu.VehicleOptionsMenu.VehicleSpecialGodMode;
+                //await Delay(100);
+
+                bool ignored = IsAllowed(Permission.POIgnored) && MainMenu.PlayerOptionsMenu != null && MainMenu.PlayerOptionsMenu.PlayerIsIgnored;
+                await Delay(100);
+
+                bool stayInVeh = IsAllowed(Permission.POStayInVehicle) && MainMenu.PlayerOptionsMenu != null && MainMenu.PlayerOptionsMenu.PlayerStayInVehicle;
+                await Delay(100);
+
+                bool bikeSeatbelt = IsAllowed(Permission.VOBikeSeatbelt) && MainMenu.VehicleOptionsMenu != null && MainMenu.VehicleOptionsMenu.VehicleBikeSeatbelt;
+                await Delay(100);
+
+                bool noRagdoll = IsAllowed(Permission.PONoRagdoll) && MainMenu.PlayerOptionsMenu != null && MainMenu.PlayerOptionsMenu.PlayerNoRagdoll;
+                await Delay(100);
+
+                bool cantBeKnockedOff = god || vehGod || /*specGod ||*/ bikeSeatbelt || noRagdoll;
+                bool cantBeDraggedOut = god || vehGod || /*specGod ||*/ ignored || stayInVeh;
+                bool cantBeShotInVehicle = god || vehGod /*|| specGod*/;
+
+                Game.PlayerPed.CanBeDraggedOutOfVehicle = !cantBeDraggedOut;
+                Game.PlayerPed.CanBeShotInVehicle = !cantBeShotInVehicle;
+                Game.PlayerPed.CanBeKnockedOffBike = !cantBeKnockedOff;
+            }
+            await Delay(1000);
+        }
+        #endregion
+
         #region Vehicle Options Tasks
         /// <summary>
         /// Manage all vehicle related tasks.
@@ -238,7 +301,7 @@ namespace vMenuClient
         private async Task VehicleOptions()
         {
             // Vehicle options. Only run vehicle options if the vehicle options menu has actually been created.
-            if (MainMenu.VehicleOptionsMenu != null && IsAllowed(Permission.VOMenu))
+            if (MainMenu.PermissionsSetupComplete && MainMenu.VehicleOptionsMenu != null && IsAllowed(Permission.VOMenu))
             {
                 // When the player is in a valid vehicle:
                 if (IsPedInAnyVehicle(Game.PlayerPed.Handle, true))
@@ -248,24 +311,42 @@ namespace vMenuClient
                     {
                         // God mode
                         bool god = MainMenu.VehicleOptionsMenu.VehicleGodMode && IsAllowed(Permission.VOGod);
-                        veh.CanBeVisiblyDamaged = !god;
-                        veh.CanEngineDegrade = !god;
-                        veh.CanWheelsBreak = !god;
-                        veh.IsAxlesStrong = god;
-                        veh.IsBulletProof = god;
-                        veh.IsCollisionProof = god;
-                        veh.IsExplosionProof = god;
-                        veh.IsFireProof = god;
-                        veh.IsInvincible = god;
-                        veh.IsMeleeProof = god;
+                        bool invincibleGod = MainMenu.VehicleOptionsMenu.VehicleGodInvincible && god;
+                        bool visualGod = MainMenu.VehicleOptionsMenu.VehicleGodVisual && god;
+                        bool engineGod = MainMenu.VehicleOptionsMenu.VehicleGodEngine && god;
+                        bool strongWheelsGod = MainMenu.VehicleOptionsMenu.VehicleGodStrongWheels && god;
+                        bool autoRepairGod = MainMenu.VehicleOptionsMenu.VehicleGodAutoRepair && god;
+                        bool rampGod = MainMenu.VehicleOptionsMenu.VehicleGodRamp && god;
+
+                        SetRampVehicleReceivesRampDamage(veh.Handle, !rampGod);
+
+                        if (visualGod && IsVehicleDamaged(veh.Handle))
+                            RemoveDecalsFromVehicle(veh.Handle);
+
+                        if (autoRepairGod && IsVehicleDamaged(veh.Handle))
+                            veh.Repair();
+
+                        veh.CanBeVisiblyDamaged = !visualGod;
+
+                        veh.CanEngineDegrade = !engineGod;
+                        if (engineGod && veh.EngineHealth < 1000f)
+                        {
+                            veh.EngineHealth = 1000f;
+                        }
+
+                        veh.CanWheelsBreak = !strongWheelsGod;
+                        veh.IsAxlesStrong = strongWheelsGod;
+
+                        veh.IsBulletProof = invincibleGod;
+                        veh.IsCollisionProof = invincibleGod;
+                        veh.IsExplosionProof = invincibleGod;
+                        veh.IsFireProof = invincibleGod;
+                        veh.IsInvincible = invincibleGod;
+                        veh.IsMeleeProof = invincibleGod;
+
                         foreach (VehicleDoor vehicleDoor in veh.Doors.GetAll())
                         {
-                            vehicleDoor.CanBeBroken = !god;
-                        }
-                        bool specialgod = MainMenu.VehicleOptionsMenu.VehicleSpecialGodMode && IsAllowed(Permission.VOSpecialGod);
-                        if (specialgod && veh.EngineHealth < 1000)
-                        {
-                            veh.Repair(); // repair vehicle if special god mode is on and the vehicle is not full health.
+                            vehicleDoor.CanBeBroken = !invincibleGod;
                         }
 
                         // Freeze Vehicle Position (if enabled).
@@ -279,7 +360,6 @@ namespace vMenuClient
                             veh.Wash();
                         }
 
-                        await Delay(0);
                         // If the torque multiplier is enabled and the player is allowed to use it.
                         if (MainMenu.VehicleOptionsMenu.VehicleTorqueMultiplier && IsAllowed(Permission.VOTorqueMultiplier))
                         {
@@ -292,6 +372,37 @@ namespace vMenuClient
                         {
                             // Only needs to be set once.
                             SwitchedVehicle = false;
+
+                            // Get the license plate type index.
+
+                            // Set the license plate index list item to the correct index.
+                            if (IsAllowed(Permission.VOChangePlate) && MainMenu.VehicleOptionsMenu.GetMenu().GetMenuItems().Find(mi => mi is MenuListItem li && li.ListItems.Any(liText => liText == GetLabelText("CMOD_PLA_0"))) is MenuListItem listItem)
+                            {
+                                // Set the license plate style.
+                                switch (veh.Mods.LicensePlateStyle)
+                                {
+                                    case LicensePlateStyle.BlueOnWhite1:
+                                        listItem.ListIndex = 0;
+                                        break;
+                                    case LicensePlateStyle.BlueOnWhite2:
+                                        listItem.ListIndex = 1;
+                                        break;
+                                    case LicensePlateStyle.BlueOnWhite3:
+                                        listItem.ListIndex = 2;
+                                        break;
+                                    case LicensePlateStyle.YellowOnBlue:
+                                        listItem.ListIndex = 3;
+                                        break;
+                                    case LicensePlateStyle.YellowOnBlack:
+                                        listItem.ListIndex = 4;
+                                        break;
+                                    case LicensePlateStyle.NorthYankton:
+                                        listItem.ListIndex = 5;
+                                        break;
+                                    default:
+                                        break;
+                                }
+                            }
 
                             // Vehicle engine power multiplier. Enable it once the player switched vehicles.
                             // Only do this if the option is enabled AND the player has permissions for it.
@@ -325,14 +436,6 @@ namespace vMenuClient
                                     SetPlaneTurbulenceMultiplier(veh.Handle, 1.0f);
                                 }
                             }
-
-                            /// TODO: add help message on how to toggle flares/bombs.
-                            /*
-                            if (CanShootFlares())
-                            {
-                                BeginTextCommandDisplayHelp("STRING")
-                            }
-                            */
                         }
 
                         // Manage "no helmet"
@@ -353,25 +456,56 @@ namespace vMenuClient
                             ped.RemoveHelmet(true);
                         }
 
+                        if (MainMenu.VehicleOptionsMenu.VehicleInfiniteFuel && DecorIsRegisteredAsType("_Fuel_Level", 1) && IsAllowed(Permission.VOInfiniteFuel))
+                        {
+                            float maxFuelLevel = GetVehicleHandlingFloat(veh.Handle, "CHandlingData", "fPetrolTankVolume");
+                            float currentFuelLevel = GetVehicleFuelLevel(veh.Handle);
+                            if (maxFuelLevel > 5f && currentFuelLevel < (maxFuelLevel * 0.95f))
+                            {
+                                try
+                                {
+                                    DecorSetFloat(veh.Handle, "_Fuel_Level", maxFuelLevel);
+                                }
+                                catch (Exception e)
+                                {
+                                    Debug.WriteLine(@"[CRITICAL] A critical bug in one of your scripts was detected. vMenu is unable to set or register a decorator's value because another resource has already registered 1.5k or more decorators. vMenu will NOT work as long as this bug in your other scripts is unsolved. Please fix your other scripts. This is *NOT* caused by or fixable by vMenu!!!");
+                                    Debug.WriteLine($"Error Location: {e.StackTrace}\nError info: {e.Message.ToString()}");
+                                    await Delay(1000);
+                                }
+                            }
+                        }
+
                         await Delay(0);
                     }
                 }
                 // When the player is not inside a vehicle:
                 else
                 {
-                    Menu[] vehicleSubmenus = new Menu[6];
-                    vehicleSubmenus[0] = MainMenu.VehicleOptionsMenu.VehicleModMenu;
-                    vehicleSubmenus[1] = MainMenu.VehicleOptionsMenu.VehicleLiveriesMenu;
-                    vehicleSubmenus[2] = MainMenu.VehicleOptionsMenu.VehicleColorsMenu;
-                    vehicleSubmenus[3] = MainMenu.VehicleOptionsMenu.VehicleDoorsMenu;
-                    vehicleSubmenus[4] = MainMenu.VehicleOptionsMenu.VehicleWindowsMenu;
-                    vehicleSubmenus[5] = MainMenu.VehicleOptionsMenu.VehicleComponentsMenu;
-                    foreach (Menu m in vehicleSubmenus)
+                    var lastVehicle = GetVehicle(true);
+                    if (lastVehicle != null && lastVehicle.Exists())
+                    {
+                        if (!lastVehicle.IsVisible)
+                        {
+                            lastVehicle.IsVisible = true;
+                        }
+                    }
+
+                    var subMenus = new List<Menu>()
+                    {
+                        MainMenu.VehicleOptionsMenu.DeleteConfirmMenu,
+                        MainMenu.VehicleOptionsMenu.VehicleColorsMenu,
+                        MainMenu.VehicleOptionsMenu.VehicleComponentsMenu,
+                        MainMenu.VehicleOptionsMenu.VehicleDoorsMenu,
+                        MainMenu.VehicleOptionsMenu.VehicleLiveriesMenu,
+                        MainMenu.VehicleOptionsMenu.VehicleModMenu,
+                        MainMenu.VehicleOptionsMenu.VehicleUnderglowMenu,
+                        MainMenu.VehicleOptionsMenu.VehicleWindowsMenu,
+                    };
+                    foreach (Menu m in subMenus)
                     {
                         if (m.Visible)
                         {
-                            MainMenu.VehicleOptionsMenu.GetMenu().OpenMenu();
-                            m.CloseMenu();
+                            m.GoBack();
                             Notify.Error(CommonErrors.NoVehicle, placeholderValue: "to access this menu");
                         }
                     }
@@ -386,16 +520,20 @@ namespace vMenuClient
                     if (GetVehicle(true) != null)
                         SetVehicleEngineOn(GetVehicle(true).Handle, true, true, true);
                 }
-
             }
             else
             {
                 await Delay(1);
             }
         }
+
+        /// <summary>
+        /// Vehicle control options for flashing highbeams.
+        /// </summary>
+        /// <returns></returns>
         private async Task MoreVehicleOptions()
         {
-            if (MainMenu.VehicleOptionsMenu != null && IsPedInAnyVehicle(Game.PlayerPed.Handle, true) && MainMenu.VehicleOptionsMenu.FlashHighbeamsOnHonk && IsAllowed(Permission.VOFlashHighbeamsOnHonk))
+            if (MainMenu.PermissionsSetupComplete && MainMenu.VehicleOptionsMenu != null && IsPedInAnyVehicle(Game.PlayerPed.Handle, true) && MainMenu.VehicleOptionsMenu.FlashHighbeamsOnHonk && IsAllowed(Permission.VOFlashHighbeamsOnHonk))
             {
                 Vehicle veh = GetVehicle();
                 if (veh != null && veh.Exists())
@@ -429,45 +567,125 @@ namespace vMenuClient
             }
 
         }
+
+        private async Task VehicleOptionsEveryFrame()
+        {
+            Vehicle veh = GetVehicle();
+            string GetHealthString(double health)
+            {
+                string color;
+                if (health <= 0)
+                {
+                    color = "~r~";
+                }
+                else
+                {
+                    switch (Math.Floor(Map(health, 0, 1000, 0, 4)))
+                    {
+                        case 0:
+                            color = "~r~";
+                            break;
+                        case 1:
+                            color = "~o~";
+                            break;
+                        case 2:
+                            color = "~y~";
+                            break;
+                        case 3:
+                        default:
+                            color = "~g~";
+                            break;
+                    }
+                }
+                return $"{color}{health}";
+            }
+            if (MainMenu.PermissionsSetupComplete && MainMenu.VehicleOptionsMenu != null && MainMenu.VehicleOptionsMenu.VehicleShowHealth && veh != null && veh.Exists())
+            {
+                DrawTextOnScreen($"~n~Engine health: {GetHealthString(Math.Round(veh.EngineHealth, 2))}", 0.5f, 0.0f);
+                DrawTextOnScreen($"~n~~n~Body health: {GetHealthString(Math.Round(veh.BodyHealth, 2))}", 0.5f, 0.0f);
+                DrawTextOnScreen($"~n~~n~~n~Tank health: {GetHealthString(Math.Round(veh.PetrolTankHealth, 2))}", 0.5f, 0.0f);
+            }
+
+            await Task.FromResult(0);
+        }
+
         #endregion
+
         #region Weather Options
-        private async Task _WeatherOptions()
+        private async Task WeatherOptions()
         {
             await Delay(1000);
-            if (MainMenu.WeatherOptionsMenu != null && IsAllowed(Permission.WOMenu) && GetSettingsBool(Setting.vmenu_enable_weather_sync))
+            if (MainMenu.PermissionsSetupComplete && MainMenu.WeatherOptionsMenu != null && IsAllowed(Permission.WOMenu) && GetSettingsBool(Setting.vmenu_enable_weather_sync))
             {
-                if (MainMenu.WeatherOptionsMenu.GetMenu().Visible)
+                Menu weatherMenu = MainMenu.WeatherOptionsMenu.GetMenu();
+                if (weatherMenu != null && weatherMenu.Visible)
                 {
-                    MainMenu.WeatherOptionsMenu.GetMenu().GetMenuItems().ForEach(mi => { if (mi.GetType() != typeof(MenuCheckboxItem)) mi.RightIcon = MenuItem.Icon.NONE; });
-                    var item = WeatherOptions.weatherHashMenuIndex[GetNextWeatherTypeHashName().ToString()];
-                    item.RightIcon = MenuItem.Icon.TICK;
+
+                    weatherMenu.GetMenuItems().ForEach(it =>
+                    {
+                        if (!(it is MenuCheckboxItem))
+                        {
+                            if (EventManager.CurrentlySwitchingWeather)
+                            {
+                                if (it.Enabled)
+                                {
+                                    it.Enabled = false;
+                                    it.LeftIcon = MenuItem.Icon.LOCK;
+                                    if (!it.Description.Contains("switching"))
+                                    {
+                                        it.Description += " Currently switching weather type, please wait before setting a new weather type.";
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                if (!it.Enabled)
+                                {
+                                    it.Enabled = true;
+                                    it.LeftIcon = MenuItem.Icon.NONE;
+                                    if (it.Description.Contains("switching"))
+                                    {
+                                        it.Description = it.Description.Replace(" Currently switching weather type, please wait before setting a new weather type.", "");
+                                    }
+                                }
+                            }
+
+                            if (it == vMenuClient.WeatherOptions.weatherHashMenuIndex[(uint)GetNextWeatherTypeHashName()])
+                            {
+                                it.RightIcon = MenuItem.Icon.TICK;
+                            }
+                            else
+                            {
+                                it.RightIcon = MenuItem.Icon.NONE;
+                            }
+                        }
+                    });
+
                     if (IsAllowed(Permission.WODynamic))
                     {
-                        MenuCheckboxItem dynWeatherTmp = (MenuCheckboxItem)MainMenu.WeatherOptionsMenu.GetMenu().GetMenuItems()[0];
+                        MenuCheckboxItem dynWeatherTmp = (MenuCheckboxItem)weatherMenu.GetMenuItems()[0];
                         dynWeatherTmp.Checked = EventManager.dynamicWeather;
                         if (IsAllowed(Permission.WOBlackout))
                         {
-                            MenuCheckboxItem blackoutTmp = (MenuCheckboxItem)MainMenu.WeatherOptionsMenu.GetMenu().GetMenuItems()[1];
+                            MenuCheckboxItem blackoutTmp = (MenuCheckboxItem)weatherMenu.GetMenuItems()[1];
                             blackoutTmp.Checked = EventManager.blackoutMode;
                         }
                     }
                     else if (IsAllowed(Permission.WOBlackout))
                     {
-                        MenuCheckboxItem blackoutTmp = (MenuCheckboxItem)MainMenu.WeatherOptionsMenu.GetMenu().GetMenuItems()[0];
+                        MenuCheckboxItem blackoutTmp = (MenuCheckboxItem)weatherMenu.GetMenuItems()[0];
                         blackoutTmp.Checked = EventManager.blackoutMode;
                     }
-
-
                 }
             }
         }
         #endregion
+
         #region Misc Settings Menu Tasks
         private async void DrawMiscSettingsText()
         {
-            if (MainMenu.MiscSettingsMenu != null)
+            if (MainMenu.PermissionsSetupComplete && MainMenu.MiscSettingsMenu != null)
             {
-
                 // draw coordinates
                 if (MainMenu.MiscSettingsMenu.ShowCoordinates && IsAllowed(Permission.MSShowCoordinates))
                 {
@@ -515,9 +733,7 @@ namespace vMenuClient
             {
                 await Delay(0);
             }
-
         }
-
         #region Update Location for location display
         /// <summary>
         /// Updates the location for location display.
@@ -525,7 +741,7 @@ namespace vMenuClient
         /// <returns></returns>
         private async Task UpdateLocation()
         {
-            if (MainMenu.MiscSettingsMenu != null)
+            if (MainMenu.PermissionsSetupComplete && MainMenu.MiscSettingsMenu != null)
             {
                 if (MainMenu.MiscSettingsMenu.ShowLocation && IsAllowed(Permission.MSShowLocation))
                 {
@@ -539,7 +755,7 @@ namespace vMenuClient
 
                     // Get the safezone size for x and y to be able to move with the minimap.
                     safeZoneSizeX = (1 / GetSafeZoneSize() / 3.0f) - 0.358f;
-                    safeZoneSizeY = GetSafeZoneSize() - 0.27f;
+                    //safeZoneSizeY = GetSafeZoneSize() - 0.27f;
                     //safeZoneSizeY = (1 / GetSafeZoneSize() / 3.6f) - 0.27f;
 
                     // Get the cross road.
@@ -560,7 +776,6 @@ namespace vMenuClient
             }
         }
         #endregion
-
         #region ShowLocation
         /// <summary>
         /// Show location function to show the player's location.
@@ -621,7 +836,6 @@ namespace vMenuClient
             DrawTextOnScreen("~t~|", 0.228f + safeZoneSizeX, GetSafeZoneSize() - GetTextScaleHeight(1.2f, 6) - GetTextScaleHeight(0.4f, 6)/*0.915f - safeZoneSizeY*/, 1.2f, Alignment.Right);
         }
         #endregion
-
         #region Private ShowSpeed Functions
         /// <summary>
         /// Shows the current speed in km/h.
@@ -652,14 +866,15 @@ namespace vMenuClient
             }
         }
         #endregion
-
+        int radarSwitchTimer = 0;
+        int lastPressedPoint = 0;
         /// <summary>
         /// Run all tasks that need to be handeled for the Misc Settings Menu.
         /// </summary>
         /// <returns></returns>
         private async Task MiscSettings()
         {
-            if (MainMenu.MiscSettingsMenu != null)
+            if (MainMenu.PermissionsSetupComplete && MainMenu.MiscSettingsMenu != null)
             {
 
                 DrawMiscSettingsText();
@@ -741,6 +956,103 @@ namespace vMenuClient
                         }
                     }
                 }
+                if (MainMenu.MiscSettingsMenu.KbPointKeys)
+                {
+                    async Task TogglePointing()
+                    {
+                        if (IsPedPointing(Game.PlayerPed.Handle))
+                        {
+                            ClearPedSecondaryTask(Game.PlayerPed.Handle);
+                        }
+                        else
+                        {
+                            if (!HasAnimDictLoaded("anim@mp_point"))
+                            {
+                                RequestAnimDict("anim@mp_point");
+                            }
+                            while (!HasAnimDictLoaded("anim@mp_point"))
+                            {
+                                await Delay(0);
+                            }
+                            TaskMoveNetwork(Game.PlayerPed.Handle, "task_mp_pointing", 0.5f, false, "anim@mp_point", 24);
+                            RemoveAnimDict("anim@mp_point");
+                        }
+                    }
+                    // Double press the right analog stick for controllers.
+                    if (Game.CurrentInputMode == InputMode.GamePad)
+                    {
+                        if (Game.IsControlJustReleased(0, Control.SpecialAbilitySecondary) && !Game.PlayerPed.IsInVehicle())
+                        {
+                            if (GetGameTimer() - lastPressedPoint < 300)
+                            {
+                                lastPressedPoint = GetGameTimer();
+                                await TogglePointing();
+                            }
+                            else
+                            {
+                                lastPressedPoint = GetGameTimer();
+                            }
+                        }
+                    }
+                    // Press the B button on keyboard once to toggle.
+                    else
+                    {
+                        if (Game.IsControlJustReleased(0, Control.SpecialAbilitySecondary) && !Game.PlayerPed.IsInVehicle())
+                        {
+                            await TogglePointing();
+                        }
+                    }
+
+                    // Set pitch, heading, blocking, first person and speed properties on animation.
+                    if (IsPedPointing(Game.PlayerPed.Handle))
+                    {
+                        if (Game.PlayerPed.IsInVehicle())
+                        {
+                            ClearPedSecondaryTask(Game.PlayerPed.Handle);
+                        }
+                        else
+                        {
+                            N_0xd5bb4025ae449a4e(Game.PlayerPed.Handle, "Pitch", GetPointingPitch());
+                            N_0xd5bb4025ae449a4e(Game.PlayerPed.Handle, "Heading", GetPointingHeading());
+                            N_0xb0a6cfd2c69c1088(Game.PlayerPed.Handle, "isBlocked", GetPointingIsBlocked());
+                            if (GetFollowPedCamViewMode() == 4)
+                            {
+                                N_0xb0a6cfd2c69c1088(Game.PlayerPed.Handle, "isFirstPerson", true);
+                            }
+                            else
+                            {
+                                N_0xb0a6cfd2c69c1088(Game.PlayerPed.Handle, "isFirstPerson", false);
+                            }
+                            N_0xd5bb4025ae449a4e(Game.PlayerPed.Handle, "Speed", 0.25f);
+                        }
+                    }
+                }
+
+                if (GetProfileSetting(221) == 1) // 221 = settings > display > expanded radar
+                {
+                    SetBigmapActive(true, false);
+                }
+                else
+                {
+                    if (IsBigmapActive() && GetGameTimer() - radarSwitchTimer > 8000)
+                    {
+                        SetBigmapActive(false, false);
+                    }
+                    if (Game.IsControlJustReleased(0, Control.MultiplayerInfo) && Game.IsControlEnabled(0, Control.MultiplayerInfo) && MainMenu.MiscSettingsMenu.KbRadarKeys && !MenuController.IsAnyMenuOpen() && !IsPauseMenuActive())
+                    {
+                        bool radarExpanded = IsBigmapActive();
+
+                        if (radarExpanded)
+                        {
+                            SetBigmapActive(false, false);
+                        }
+                        else
+                        {
+                            SetBigmapActive(true, false);
+                            radarSwitchTimer = GetGameTimer();
+                        }
+                    }
+                }
             }
             else
             {
@@ -748,6 +1060,122 @@ namespace vMenuClient
             }
         }
 
+
+        private async Task MiscRecordingKeybinds()
+        {
+            if (MainMenu.MiscSettingsMenu != null)
+            {
+                if (MainMenu.MiscSettingsMenu.KbRecordKeys)
+                {
+                    if (!IsPauseMenuActive() && IsScreenFadedIn() && !IsPlayerSwitchInProgress() && !MenuController.IsAnyMenuOpen())
+                    {
+                        if (Game.CurrentInputMode == InputMode.MouseAndKeyboard)
+                        {
+                            Control recordKey = MainMenu.MenuToggleKey == Control.ReplayStartStopRecording ? Control.SaveReplayClip : Control.ReplayStartStopRecording;
+                            if (!IsRecording())
+                            {
+                                if (Game.IsControlJustReleased(0, recordKey))
+                                {
+                                    StartRecording(1);
+                                    if (recordKey == Control.ReplayStartStopRecording)
+                                    {
+                                        HelpMessage.Custom("Press ~INPUT_REPLAY_START_STOP_RECORDING~ to save the recording, press ~INPUT_REPLAY_CLIP_DELETE~ to discard the recording.");
+                                    }
+                                    else
+                                    {
+                                        HelpMessage.Custom("Press ~INPUT_SAVE_REPLAY_CLIP~ to save the recording, press ~INPUT_REPLAY_CLIP_DELETE~ to discard the recording.");
+                                    }
+
+                                }
+                            }
+                            else
+                            {
+                                if (Game.IsControlJustReleased(0, recordKey))
+                                {
+                                    StopRecording();
+                                }
+                                if (Game.IsControlJustPressed(0, Control.ReplayClipDelete)) // delete key on keyboard
+                                {
+                                    StopRecordingAndDiscardClip();
+                                }
+                            }
+                        }
+                        else
+                        {
+                            if (Game.IsControlPressed(0, Control.MultiplayerInfo))
+                            {
+                                int timer = GetGameTimer();
+                                bool longEnough = false;
+                                int notifOne = -1;
+                                int notifTwo = -1;
+                                while (Game.IsControlPressed(0, Control.MultiplayerInfo))
+                                {
+                                    if (GetGameTimer() - timer > 400 && !longEnough)
+                                    {
+                                        longEnough = true;
+
+                                        if (IsRecording())
+                                        {
+                                            SetNotificationTextEntry("STRING");
+                                            notifOne = DrawNotificationWithButton(1, "~INPUT_REPLAY_START_STOP_RECORDING~", "Stop recording and save clip.");
+                                            SetNotificationTextEntry("STRING");
+                                            notifTwo = DrawNotificationWithButton(1, "~INPUT_SAVE_REPLAY_CLIP~", "Stop recording and delete clip.");
+                                        }
+                                        else
+                                        {
+                                            SetNotificationTextEntry("STRING");
+                                            notifOne = DrawNotificationWithButton(1, "~INPUT_REPLAY_START_STOP_RECORDING~", "Start recording.");
+                                        }
+                                    }
+
+                                    if (longEnough)
+                                    {
+                                        Game.DisableControlThisFrame(0, Control.VehicleCinCam);
+
+                                        if (IsRecording())
+                                        {
+                                            if (Game.IsControlJustReleased(0, Control.SaveReplayClip))
+                                            {
+                                                StopRecordingAndDiscardClip();
+                                                break;
+                                            }
+                                            if (Game.IsControlJustReleased(0, Control.ReplayStartStopRecording))
+                                            {
+                                                StopRecording();
+                                                break;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            if (Game.IsControlJustReleased(0, Control.ReplayStartStopRecording))
+                                            {
+                                                StartRecording(1);
+                                                HelpMessage.Custom("Hold down ~INPUT_MULTIPLAYER_INFO~ and press ~INPUT_REPLAY_START_STOP_RECORDING~ to save the recording, press ~INPUT_SAVE_REPLAY_CLIP~ to discard the recording.");
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    await Delay(0);
+                                }
+
+                                if (notifOne != -1)
+                                {
+                                    RemoveNotification(notifOne);
+                                    notifOne = -1;
+                                }
+                                if (notifTwo != -1)
+                                {
+                                    RemoveNotification(notifTwo);
+                                    notifTwo = -1;
+                                }
+                            }
+                        }
+
+                    }
+                }
+            }
+        }
         #region Join / Quit notifications
         /// <summary>
         /// Runs join/quit notification checks.
@@ -755,7 +1183,7 @@ namespace vMenuClient
         /// <returns></returns>
         private async Task JoinQuitNotifications()
         {
-            if (MainMenu.MiscSettingsMenu != null)
+            if (MainMenu.PermissionsSetupComplete && MainMenu.MiscSettingsMenu != null)
             {
                 // Join/Quit notifications
                 if (MainMenu.MiscSettingsMenu.JoinQuitNotifications && IsAllowed(Permission.MSJoinQuitNotifs))
@@ -797,7 +1225,6 @@ namespace vMenuClient
             }
         }
         #endregion
-
         #region Death Notifications
         /// <summary>
         /// Runs death notification checks.
@@ -805,7 +1232,7 @@ namespace vMenuClient
         /// <returns></returns>
         private async Task DeathNotifications()
         {
-            if (MainMenu.MiscSettingsMenu != null)
+            if (MainMenu.PermissionsSetupComplete && MainMenu.MiscSettingsMenu != null)
             {
                 // Death notifications
                 if (MainMenu.MiscSettingsMenu.DeathNotifications && IsAllowed(Permission.MSDeathNotifs))
@@ -815,10 +1242,7 @@ namespace vMenuClient
                     foreach (Player p in pl)
                     {
                         tmpiterator++;
-                        //if (tmpiterator % 5 == 0)
-                        //{
                         await Delay(0);
-                        //}
                         if (p.IsDead)
                         {
                             if (deadPlayers.Contains(p.Handle)) { return; }
@@ -900,8 +1324,8 @@ namespace vMenuClient
             }
         }
         #endregion
-
         #endregion
+
         #region Voice Chat Tasks
         /// <summary>
         /// Run all voice chat options tasks
@@ -909,7 +1333,7 @@ namespace vMenuClient
         /// <returns></returns>
         private async Task VoiceChat()
         {
-            if (MainMenu.VoiceChatSettingsMenu != null && IsAllowed(Permission.VCMenu))
+            if (MainMenu.PermissionsSetupComplete && MainMenu.VoiceChatSettingsMenu != null && IsAllowed(Permission.VCMenu))
             {
                 if (MainMenu.VoiceChatSettingsMenu.EnableVoicechat && IsAllowed(Permission.VCEnable))
                 {
@@ -992,6 +1416,7 @@ namespace vMenuClient
             }
         }
         #endregion
+
         #region Update Time Options Menu (current time display)
         /// <summary>
         /// Update the current time display in the time options menu.
@@ -999,7 +1424,7 @@ namespace vMenuClient
         /// <returns></returns>
         private async Task TimeOptions()
         {
-            if (MainMenu.TimeOptionsMenu != null && IsAllowed(Permission.TOMenu) && GetSettingsBool(Setting.vmenu_enable_time_sync))
+            if (MainMenu.PermissionsSetupComplete && MainMenu.TimeOptionsMenu != null && IsAllowed(Permission.TOMenu) && GetSettingsBool(Setting.vmenu_enable_time_sync))
             {
                 if ((MainMenu.TimeOptionsMenu.freezeTimeToggle != null && MainMenu.TimeOptionsMenu.GetMenu().Visible) && IsAllowed(Permission.TOFreezeTime))
                 {
@@ -1015,6 +1440,7 @@ namespace vMenuClient
             await Delay(2000);
         }
         #endregion
+
         #region Weapon Options Tasks
         /// <summary>
         /// Manage all weapon options that need to be handeled every tick.
@@ -1022,7 +1448,7 @@ namespace vMenuClient
         /// <returns></returns>
         private async Task WeaponOptions()
         {
-            if (MainMenu.WeaponOptionsMenu != null && IsAllowed(Permission.WPMenu))
+            if (MainMenu.PermissionsSetupComplete && MainMenu.WeaponOptionsMenu != null && IsAllowed(Permission.WPMenu))
             {
                 // If no reload is enabled.
                 if (MainMenu.WeaponOptionsMenu.NoReload && Game.PlayerPed.Weapons.Current.Hash != WeaponHash.Minigun && IsAllowed(Permission.WPNoReload))
@@ -1057,6 +1483,19 @@ namespace vMenuClient
                         SetPlayerCanLeaveParachuteSmokeTrail(Game.PlayerPed.Handle, true);
                     }
                 }
+
+                if (MainMenu.WeaponOptionsMenu.UnlimitedParachutes)
+                {
+                    if (!HasPedGotWeapon(Game.PlayerPed.Handle, (uint)GetHashKey("gadget_parachute"), false))
+                    {
+                        GiveWeaponToPed(Game.PlayerPed.Handle, (uint)GetHashKey("gadget_parachute"), 0, false, false);
+                    }
+
+                    if (!GetPlayerHasReserveParachute(Game.Player.Handle))
+                    {
+                        SetPlayerHasReserveParachute(Game.Player.Handle);
+                    }
+                }
             }
             else
             {
@@ -1064,6 +1503,7 @@ namespace vMenuClient
             }
         }
         #endregion
+
         #region Spectate Handling Tasks
         /// <summary>
         /// OnTick runs every game tick.
@@ -1072,7 +1512,7 @@ namespace vMenuClient
         /// <returns></returns>
         private async Task SpectateHandling()
         {
-            if (MainMenu.OnlinePlayersMenu != null && IsAllowed(Permission.OPMenu) && IsAllowed(Permission.OPSpectate))
+            if (MainMenu.PermissionsSetupComplete && MainMenu.OnlinePlayersMenu != null && IsAllowed(Permission.OPMenu) && IsAllowed(Permission.OPSpectate))
             {
                 // When the player dies while spectating, cancel the spectating to prevent an infinite black loading screen.
                 if (GetEntityHealth(Game.PlayerPed.Handle) < 1 && NetworkIsInSpectatorMode())
@@ -1096,445 +1536,497 @@ namespace vMenuClient
             }
         }
         #endregion
+
         #region Player Appearance
 
+        internal static bool reverseCamera = false;
+        private static Camera camera;
+        internal static float CameraFov { get; set; } = 45;
+        internal static int CurrentCam { get; set; }
+        internal static List<KeyValuePair<Vector3, Vector3>> CameraOffsets { get; } = new List<KeyValuePair<Vector3, Vector3>>()
+        {
+            // Full body
+            new KeyValuePair<Vector3, Vector3>(new Vector3(0f, 2.8f, 0.3f), new Vector3(0f, 0f, 0f)),
 
-        /// <summary>
-        /// Manages the camera view for when the mp ped creator is open.
-        /// </summary>
-        /// <returns></returns>
-        private async Task ManagePlayerAppearanceCamera()
+            // Head level
+            new KeyValuePair<Vector3, Vector3>(new Vector3(0f, 0.9f, 0.65f), new Vector3(0f, 0f, 0.6f)),
+
+            // Upper Body
+            new KeyValuePair<Vector3, Vector3>(new Vector3(0f, 1.4f, 0.5f), new Vector3(0f, 0f, 0.3f)),
+
+            // Lower Body
+            new KeyValuePair<Vector3, Vector3>(new Vector3(0f, 1.6f, -0.3f), new Vector3(0f, 0f, -0.45f)),
+
+            // Shoes
+            new KeyValuePair<Vector3, Vector3>(new Vector3(0f, 0.98f, -0.7f), new Vector3(0f, 0f, -0.90f)),
+
+            // Lower Arms
+            new KeyValuePair<Vector3, Vector3>(new Vector3(0f, 0.98f, 0.1f), new Vector3(0f, 0f, 0f)),
+
+            // Full arms
+            new KeyValuePair<Vector3, Vector3>(new Vector3(0f, 1.3f, 0.35f), new Vector3(0f, 0f, 0.15f)),
+        };
+
+        private async Task UpdateCamera(Camera oldCamera, Vector3 pos, Vector3 pointAt)
+        {
+            var newCam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true);
+            var newCamera = new Camera(newCam)
+            {
+                Position = pos,
+                FieldOfView = CameraFov
+            };
+            newCamera.PointAt(pointAt);
+            oldCamera.InterpTo(newCamera, 1000, true, true);
+            while (oldCamera.IsInterpolating || !newCamera.IsActive)
+            {
+                SetEntityCollision(Game.PlayerPed.Handle, false, false);
+                //Game.PlayerPed.IsInvincible = true;
+                Game.PlayerPed.IsPositionFrozen = true;
+                await Delay(0);
+            }
+            await Delay(50);
+            oldCamera.Delete();
+            CurrentCam = newCam;
+            camera = newCamera;
+        }
+
+        private bool IsMpCharEditorOpen()
         {
             if (MainMenu.MpPedCustomizationMenu != null)
             {
-                var menu = MainMenu.MpPedCustomizationMenu.GetMenu();
+                return
+                    MainMenu.MpPedCustomizationMenu.appearanceMenu.Visible ||
+                    MainMenu.MpPedCustomizationMenu.faceShapeMenu.Visible ||
+                    MainMenu.MpPedCustomizationMenu.createCharacterMenu.Visible ||
+                    MainMenu.MpPedCustomizationMenu.inheritanceMenu.Visible ||
+                    MainMenu.MpPedCustomizationMenu.propsMenu.Visible ||
+                    MainMenu.MpPedCustomizationMenu.clothesMenu.Visible ||
+                    MainMenu.MpPedCustomizationMenu.tattoosMenu.Visible;
+            }
+            return false;
+        }
 
-                bool IsOpen()
+        private async Task ManageCamera()
+        {
+            if (MainMenu.PermissionsSetupComplete && MainMenu.MpPedCustomizationMenu != null)
+            {
+                if (Game.PlayerPed.IsInVehicle())
                 {
-                    return
-                        MainMenu.MpPedCustomizationMenu.appearanceMenu.Visible ||
-                        MainMenu.MpPedCustomizationMenu.faceShapeMenu.Visible ||
-                        MainMenu.MpPedCustomizationMenu.createCharacterMenu.Visible ||
-                        MainMenu.MpPedCustomizationMenu.inheritanceMenu.Visible ||
-                        MainMenu.MpPedCustomizationMenu.propsMenu.Visible ||
-                        MainMenu.MpPedCustomizationMenu.clothesMenu.Visible ||
-                        MainMenu.MpPedCustomizationMenu.tattoosMenu.Visible;
+                    if (MainMenu.MpPedCustomizationMenu.editPedBtn != null && MainMenu.MpPedCustomizationMenu.editPedBtn.Enabled)
+                    {
+                        MainMenu.MpPedCustomizationMenu.editPedBtn.Enabled = false;
+                        MainMenu.MpPedCustomizationMenu.editPedBtn.LeftIcon = MenuItem.Icon.LOCK;
+                        MainMenu.MpPedCustomizationMenu.editPedBtn.Description += " ~r~You need to get out of your vehicle before you can use this.";
+                    }
+                    if (MainMenu.MpPedCustomizationMenu.createMaleBtn != null && MainMenu.MpPedCustomizationMenu.createMaleBtn.Enabled)
+                    {
+                        MainMenu.MpPedCustomizationMenu.createMaleBtn.Enabled = false;
+                        MainMenu.MpPedCustomizationMenu.createMaleBtn.LeftIcon = MenuItem.Icon.LOCK;
+                        MainMenu.MpPedCustomizationMenu.createMaleBtn.Description += " ~r~You need to get out of your vehicle before you can use this.";
+                    }
+                    if (MainMenu.MpPedCustomizationMenu.createFemaleBtn != null && MainMenu.MpPedCustomizationMenu.createFemaleBtn.Enabled)
+                    {
+                        MainMenu.MpPedCustomizationMenu.createFemaleBtn.Enabled = false;
+                        MainMenu.MpPedCustomizationMenu.createFemaleBtn.LeftIcon = MenuItem.Icon.LOCK;
+                        MainMenu.MpPedCustomizationMenu.createFemaleBtn.Description += " ~r~You need to get out of your vehicle before you can use this.";
+                    }
+                }
+                else
+                {
+                    if (MainMenu.MpPedCustomizationMenu.editPedBtn != null && !MainMenu.MpPedCustomizationMenu.editPedBtn.Enabled)
+                    {
+                        MainMenu.MpPedCustomizationMenu.editPedBtn.Enabled = true;
+                        MainMenu.MpPedCustomizationMenu.editPedBtn.LeftIcon = MenuItem.Icon.NONE;
+                        MainMenu.MpPedCustomizationMenu.editPedBtn.Description = MainMenu.MpPedCustomizationMenu.editPedBtn.Description.Replace(" ~r~You need to get out of your vehicle before you can use this.", "");
+                    }
+                    if (MainMenu.MpPedCustomizationMenu.createMaleBtn != null && !MainMenu.MpPedCustomizationMenu.createMaleBtn.Enabled)
+                    {
+                        MainMenu.MpPedCustomizationMenu.createMaleBtn.Enabled = true;
+                        MainMenu.MpPedCustomizationMenu.createMaleBtn.LeftIcon = MenuItem.Icon.NONE;
+                        MainMenu.MpPedCustomizationMenu.createMaleBtn.Description = MainMenu.MpPedCustomizationMenu.createMaleBtn.Description.Replace(" ~r~You need to get out of your vehicle before you can use this.", "");
+                    }
+                    if (MainMenu.MpPedCustomizationMenu.createFemaleBtn != null && !MainMenu.MpPedCustomizationMenu.createFemaleBtn.Enabled)
+                    {
+                        MainMenu.MpPedCustomizationMenu.createFemaleBtn.Enabled = true;
+                        MainMenu.MpPedCustomizationMenu.createFemaleBtn.LeftIcon = MenuItem.Icon.NONE;
+                        MainMenu.MpPedCustomizationMenu.createFemaleBtn.Description = MainMenu.MpPedCustomizationMenu.createFemaleBtn.Description.Replace(" ~r~You need to get out of your vehicle before you can use this.", "");
+                    }
                 }
 
-                if (IsOpen())
+                var menu = MainMenu.MpPedCustomizationMenu.GetMenu();
+
+
+
+                if (IsMpCharEditorOpen())
                 {
-                    List<KeyValuePair<Vector3, Vector3>> camPositions = new List<KeyValuePair<Vector3, Vector3>>()
+                    if (!HasAnimDictLoaded("anim@random@shop_clothes@watches"))
                     {
-                        // normal variants
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(0f, 1.8f, 0.2f)), Game.PlayerPed.Position + new Vector3(0f, 0f, 0.0f)),     // default 0
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(0f, 0.5f, 0.65f)), Game.PlayerPed.Position + new Vector3(0f, 0f, 0.65f)),   // head 1
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(0f, 1.2f, 0.40f)), Game.PlayerPed.Position + new Vector3(0f, 0f, 0.35f)), // upper body 2
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(0f, 1.3f, -0.2f)), Game.PlayerPed.Position + new Vector3(0f, 0f, -0.25f)), // lower body 3
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(0f, 0.7f, -0.5f)), Game.PlayerPed.Position + new Vector3(0f, 0f, -0.8f)), // shoes 4
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(-0.4f, 0.7f, -0.1f)), Game.PlayerPed.Position + new Vector3(0f, -0.1f, -0.25f)), // left wrist 5
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(0.4f, 0.7f, -0.1f)), Game.PlayerPed.Position + new Vector3(0f, -0.1f, -0.25f)), // right wrist 6
-
-                        // tattoo turn left variants
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(-0.4f, 0.5f, 0.65f)), Game.PlayerPed.Position + new Vector3(0f, 0f, 0.65f)), // head 7
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(-0.7f, 1.2f, 0.40f)), Game.PlayerPed.Position + new Vector3(0f, 0f, 0.35f)), // head 8
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(-0.7f, 1.3f, -0.2f)), Game.PlayerPed.Position + new Vector3(0f, 0f, -0.25f)), // head 9
-
-                        // tattoo turn right variants
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(0.4f, 0.5f, 0.65f)), Game.PlayerPed.Position + new Vector3(0f, 0f, 0.65f)), // head 10
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(0.7f, 1.2f, 0.40f)), Game.PlayerPed.Position + new Vector3(0f, 0f, 0.35f)), // head 11
-                        new KeyValuePair<Vector3, Vector3>(Game.PlayerPed.GetOffsetPosition(new Vector3(0.7f, 1.3f, -0.2f)), Game.PlayerPed.Position + new Vector3(0f, 0f, -0.25f)), // head 12
-                    };
-
-                    int cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true);
-                    Camera camera = new Camera(cam);
-
-                    Game.PlayerPed.Task.ClearAllImmediately();
-
-                    /* 
-                     * Camera positions and PointAt locations.
-                    
-                    // head close up
-                    camera.Position = Game.PlayerPed.GetOffsetPosition(new Vector3(0f, 0.5f, 0.65f));
-                    camera.PointAt(Game.PlayerPed.Position + new Vector3(0f, 0f, 0.65f));
-                    
-                    // upper body close up
-                    camera.Position = Game.PlayerPed.GetOffsetPosition(new Vector3(0f, 1.2f, 0.40f));
-                    camera.PointAt(Game.PlayerPed.Position + new Vector3(0f, 0f, 0.35f));
-                    
-                    // lower body close up
-                    camera.Position = Game.PlayerPed.GetOffsetPosition(new Vector3(0f, 1.3f, -0.2f));
-                    camera.PointAt(Game.PlayerPed.Position + new Vector3(0f, 0f, -0.25f));
-                    
-                    // very low (feet level) very close up
-                    camera.Position = Game.PlayerPed.GetOffsetPosition(new Vector3(0f, 0.7f, -0.5f));
-                    camera.PointAt(Game.PlayerPed.Position + new Vector3(0f, 0f, -0.8f));
-                    
-                    // default normal height full character visible.
-                    camera.Position = Game.PlayerPed.GetOffsetPosition(new Vector3(0f, 1.8f, 0.2f));
-                    camera.PointAt(Game.PlayerPed.Position + new Vector3(0f, 0f, 0.0f));
-                    
-                    */
-
-                    bool rearCamActive = false;
-
-                    void SetCameraPosition()
-                    {
-                        if (MainMenu.MpPedCustomizationMenu.appearanceMenu.Visible)
-                        {
-                            int index = MainMenu.MpPedCustomizationMenu.appearanceMenu.CurrentIndex;
-                            switch (index)
-                            {
-                                case 0:
-                                case 1:
-                                case 2:
-                                case 3:
-                                case 4:
-                                case 5:
-                                case 6:
-                                case 7:
-                                case 8:
-                                case 9:
-                                case 10:
-                                case 11:
-                                case 12:
-                                case 13:
-                                case 14:
-                                case 15:
-                                case 16:
-                                case 17:
-                                case 18:
-                                case 19:
-                                case 20:
-                                case 21:
-                                case 22:
-                                case 23:
-                                case 24:
-                                case 25:
-                                case 26:
-                                case 27:
-                                case 31:
-                                    // close up head.
-                                    camera.Position = camPositions[1].Key;
-                                    camera.PointAt(camPositions[1].Value);
-                                    break;
-                                case 28:
-                                case 29:
-                                case 30:
-                                    // torso
-                                    camera.Position = camPositions[2].Key;
-                                    camera.PointAt(camPositions[2].Value);
-                                    break;
-                                default:
-                                    // normal position (full character visible)
-                                    camera.Position = camPositions[0].Key;
-                                    camera.PointAt(camPositions[0].Value);
-                                    break;
-                            }
-                        }
-                        else if (MainMenu.MpPedCustomizationMenu.clothesMenu.Visible)
-                        {
-                            int index = MainMenu.MpPedCustomizationMenu.clothesMenu.CurrentIndex;
-                            switch (index)
-                            {
-                                case 0:
-                                    // head level
-                                    camera.Position = camPositions[1].Key;
-                                    camera.PointAt(camPositions[1].Value);
-                                    break;
-                                case 1:
-                                case 3:
-                                case 5:
-                                case 6:
-                                case 7:
-                                case 9:
-                                    // upper body level
-                                    camera.Position = camPositions[2].Key;
-                                    camera.PointAt(camPositions[2].Value);
-                                    break;
-                                case 2:
-                                    // lower body level
-                                    camera.Position = camPositions[3].Key;
-                                    camera.PointAt(camPositions[3].Value);
-                                    break;
-                                case 4:
-                                    // feet (ground) level (close up)
-                                    camera.Position = camPositions[4].Key;
-                                    camera.PointAt(camPositions[4].Value);
-                                    break;
-                                case 8:
-                                default:
-                                    // normal position (full character visible)
-                                    camera.Position = camPositions[0].Key;
-                                    camera.PointAt(camPositions[0].Value);
-                                    break;
-                            }
-                        }
-                        else if (MainMenu.MpPedCustomizationMenu.inheritanceMenu.Visible)
-                        {
-                            // head level
-                            camera.Position = camPositions[1].Key;
-                            camera.PointAt(camPositions[1].Value);
-                        }
-                        else if (MainMenu.MpPedCustomizationMenu.propsMenu.Visible)
-                        {
-                            int index = MainMenu.MpPedCustomizationMenu.propsMenu.CurrentIndex;
-                            switch (index)
-                            {
-                                case 0:
-                                case 1:
-                                case 2:
-                                    // head level
-                                    camera.Position = camPositions[1].Key;
-                                    camera.PointAt(camPositions[1].Value);
-                                    break;
-                                case 3:
-                                    // left wrist
-                                    if (rearCamActive)
-                                    {
-                                        camera.Position = camPositions[6].Key;
-                                        camera.PointAt(camPositions[6].Value);
-                                    }
-                                    else
-                                    {
-                                        camera.Position = camPositions[5].Key;
-                                        camera.PointAt(camPositions[5].Value);
-                                    }
-                                    break;
-                                case 4:
-                                    // right wrist
-                                    if (rearCamActive)
-                                    {
-                                        camera.Position = camPositions[5].Key;
-                                        camera.PointAt(camPositions[5].Value);
-                                    }
-                                    else
-                                    {
-                                        camera.Position = camPositions[6].Key;
-                                        camera.PointAt(camPositions[6].Value);
-                                    }
-                                    break;
-                                default:
-                                    // normal position (full character visible)
-                                    camera.Position = camPositions[0].Key;
-                                    camera.PointAt(camPositions[0].Value);
-                                    break;
-                            }
-                        }
-                        // face shape
-                        else if (MainMenu.MpPedCustomizationMenu.faceShapeMenu.Visible)
-                        {
-                            camera.Position = camPositions[1].Key;
-                            camera.PointAt(camPositions[1].Value);
-                        }
-                        // tattoos
-                        else if (MainMenu.MpPedCustomizationMenu.tattoosMenu.Visible)
-                        {
-                            int index = MainMenu.MpPedCustomizationMenu.tattoosMenu.CurrentIndex;
-                            switch (index)
-                            {
-                                case 0:
-                                    // head level
-                                    if (Game.IsControlPressed(0, Control.ParachuteBrakeRight)) // turn camera to the right
-                                    {
-                                        camera.Position = camPositions[7].Key;
-                                        camera.PointAt(camPositions[7].Value);
-                                    }
-                                    else if (Game.IsControlPressed(0, Control.ParachuteBrakeLeft)) // turn camera to the left
-                                    {
-                                        camera.Position = camPositions[10].Key;
-                                        camera.PointAt(camPositions[10].Value);
-                                    }
-                                    else // normal
-                                    {
-                                        camera.Position = camPositions[1].Key;
-                                        camera.PointAt(camPositions[1].Value);
-                                    }
-                                    break;
-                                case 1:
-                                case 2:
-                                case 3:
-                                    // upper body level
-                                    if (Game.IsControlPressed(0, Control.ParachuteBrakeRight)) // turn camera to the right
-                                    {
-                                        camera.Position = camPositions[8].Key;
-                                        camera.PointAt(camPositions[8].Value);
-                                    }
-                                    else if (Game.IsControlPressed(0, Control.ParachuteBrakeLeft)) // turn camera to the left
-                                    {
-                                        camera.Position = camPositions[11].Key;
-                                        camera.PointAt(camPositions[11].Value);
-                                    }
-                                    else // normal
-                                    {
-                                        camera.Position = camPositions[2].Key;
-                                        camera.PointAt(camPositions[2].Value);
-                                    }
-                                    break;
-                                case 4:
-                                case 5:
-                                    // lower body level
-                                    if (Game.IsControlPressed(0, Control.ParachuteBrakeRight)) // turn camera to the right
-                                    {
-                                        camera.Position = camPositions[9].Key;
-                                        camera.PointAt(camPositions[9].Value);
-                                    }
-                                    else if (Game.IsControlPressed(0, Control.ParachuteBrakeLeft)) // turn camera to the left
-                                    {
-                                        camera.Position = camPositions[12].Key;
-                                        camera.PointAt(camPositions[12].Value);
-                                    }
-                                    else // normal
-                                    {
-                                        camera.Position = camPositions[3].Key;
-                                        camera.PointAt(camPositions[3].Value);
-                                    }
-                                    break;
-                                default:
-                                    // normal position (full character visible)
-                                    camera.Position = camPositions[0].Key;
-                                    camera.PointAt(camPositions[0].Value);
-                                    break;
-                            }
-                        }
-                        else
-                        {
-                            if (MainMenu.MpPedCustomizationMenu.createCharacterMenu.Visible && MainMenu.MpPedCustomizationMenu.createCharacterMenu.CurrentIndex == 6)
-                            {
-                                // head level
-                                camera.Position = camPositions[1].Key;
-                                camera.PointAt(camPositions[1].Value);
-                            }
-                            else
-                            {
-                                camera.Position = camPositions[0].Key;
-                                camera.PointAt(camPositions[0].Value);
-                            }
-
-                        }
+                        RequestAnimDict("anim@random@shop_clothes@watches");
                     }
-
-                    float heading = Game.PlayerPed.Heading;
-
-                    while (IsOpen())
+                    while (!HasAnimDictLoaded("anim@random@shop_clothes@watches"))
                     {
                         await Delay(0);
-                        DisplayRadar(false);
+                    }
 
-                        SetEntityInvincible(Game.PlayerPed.Handle, true);
-                        SetEntityCollision(Game.PlayerPed.Handle, false, false);
+                    while (IsMpCharEditorOpen())
+                    {
+                        await Delay(0);
 
-                        RenderScriptCams(true, false, 0, true, false);
-                        if (Game.IsControlJustReleased(0, Control.PhoneExtraOption))
+                        int index = GetCameraIndex(MenuController.GetCurrentMenu());
+                        if (MenuController.GetCurrentMenu() == MainMenu.MpPedCustomizationMenu.propsMenu && MenuController.GetCurrentMenu().CurrentIndex == 3 && !reverseCamera)
                         {
-                            var Pos = Game.PlayerPed.Position;
-                            if (rearCamActive)
-                            {
-                                SetEntityCollision(Game.PlayerPed.Handle, true, true);
-                                FreezeEntityPosition(Game.PlayerPed.Handle, false);
-                                TaskGoStraightToCoord(Game.PlayerPed.Handle, Pos.X, Pos.Y, Pos.Z, 8f, 1600, heading, 0.1f);
-                                int timer = GetGameTimer();
-                                while (true)
-                                {
-                                    await Delay(0);
-                                    DisplayRadar(false);
-                                    //CommonFunctions.DisableMovementControlsThisFrame(true, true);
-                                    Game.DisableAllControlsThisFrame(0);
-                                    if (GetGameTimer() - timer > 1600)
-                                    {
-                                        break;
-                                    }
-                                }
-                                ClearPedTasks(Game.PlayerPed.Handle);
-                                Game.PlayerPed.PositionNoOffset = Pos;
-                                FreezeEntityPosition(Game.PlayerPed.Handle, true);
-                                SetEntityCollision(Game.PlayerPed.Handle, false, false);
-                            }
-                            else
-                            {
-                                SetEntityCollision(Game.PlayerPed.Handle, true, true);
-                                FreezeEntityPosition(Game.PlayerPed.Handle, false);
-                                TaskGoStraightToCoord(Game.PlayerPed.Handle, Pos.X, Pos.Y, Pos.Z, 8f, 1600, heading - 180f, 0.1f);
-                                int timer = GetGameTimer();
-                                while (true)
-                                {
-                                    await Delay(0);
-                                    DisplayRadar(false);
-                                    Game.DisableAllControlsThisFrame(0);
-                                    if (GetGameTimer() - timer > 1600)
-                                    {
-                                        break;
-                                    }
-                                }
-                                ClearPedTasks(Game.PlayerPed.Handle);
-                                Game.PlayerPed.PositionNoOffset = Pos;
-                                FreezeEntityPosition(Game.PlayerPed.Handle, true);
-                                SetEntityCollision(Game.PlayerPed.Handle, false, false);
-                            }
-                            rearCamActive = !rearCamActive;
-                        }
-
-                        FreezeEntityPosition(Game.PlayerPed.Handle, true);
-
-                        DisableMovementControlsThisFrame(true, true);
-
-                        SetCameraPosition();
-
-                        Game.PlayerPed.Task.ClearAll();
-
-                        var offsetRight = GetOffsetFromEntityInWorldCoords(Game.PlayerPed.Handle, -2f, 0.05f, 0.7f);
-                        var offsetLeft = GetOffsetFromEntityInWorldCoords(Game.PlayerPed.Handle, 2f, 0.05f, 0.7f);
-
-                        if (Game.IsDisabledControlPressed(0, Control.MoveRight))
-                        {
-                            Game.PlayerPed.Task.LookAt(offsetRight, 100);
-                        }
-                        else if (Game.IsDisabledControlPressed(0, Control.MoveLeftOnly))
-                        {
-                            Game.PlayerPed.Task.LookAt(offsetLeft, 100);
+                            TaskPlayAnim(Game.PlayerPed.Handle, "anim@random@shop_clothes@watches", "BASE", 8f, -8f, -1, 1, 0, false, false, false);
                         }
                         else
                         {
-                            float input = GetDisabledControlNormal(0, 1);
+                            Game.PlayerPed.Task.ClearAll();
+                        }
 
-                            if (input > 0.5f)
-                            {
-                                Game.PlayerPed.Task.LookAt(offsetRight, 100);
-                            }
-                            else if (input < -0.5f)
-                            {
-                                Game.PlayerPed.Task.LookAt(offsetLeft, 100);
-                            }
-                            else
-                            {
-                                if (MainMenu.MpPedCustomizationMenu.tattoosMenu.Visible)
-                                {
-                                    Game.PlayerPed.Task.LookAt(Game.PlayerPed.GetOffsetPosition(new Vector3(0f, -3f, 0f)), 100);
-                                }
-                                else
-                                {
-                                    Game.PlayerPed.Task.LookAt(camera.Position, 100);
-                                }
+                        var xOffset = 0f;
+                        var yOffset = 0f;
 
+                        if ((Game.IsControlPressed(0, Control.ParachuteBrakeLeft) || Game.IsControlPressed(0, Control.ParachuteBrakeRight)) && !(Game.IsControlPressed(0, Control.ParachuteBrakeLeft) && Game.IsControlPressed(0, Control.ParachuteBrakeRight)))
+                        {
+                            switch (index)
+                            {
+                                case 0:
+                                    xOffset = 2.2f;
+                                    yOffset = -1f;
+                                    break;
+                                case 1:
+                                    xOffset = 0.7f;
+                                    yOffset = -0.45f;
+                                    break;
+                                case 2:
+                                    xOffset = 1.35f;
+                                    yOffset = -0.4f;
+                                    break;
+                                case 3:
+                                    xOffset = 1.0f;
+                                    yOffset = -0.4f;
+                                    break;
+                                case 4:
+                                    xOffset = 0.9f;
+                                    yOffset = -0.4f;
+                                    break;
+                                case 5:
+                                    xOffset = 0.8f;
+                                    yOffset = -0.7f;
+                                    break;
+                                case 6:
+                                    xOffset = 1.5f;
+                                    yOffset = -1.0f;
+                                    break;
+                                default:
+                                    xOffset = 0f;
+                                    yOffset = 0.2f;
+                                    break;
+                            }
+                            if (Game.IsControlPressed(0, Control.ParachuteBrakeRight))
+                            {
+                                xOffset *= -1f;
+                            }
+
+                        }
+
+                        Vector3 pos;
+                        if (reverseCamera)
+                            pos = GetOffsetFromEntityInWorldCoords(Game.PlayerPed.Handle, (CameraOffsets[index].Key.X + xOffset) * -1f, (CameraOffsets[index].Key.Y + yOffset) * -1f, CameraOffsets[index].Key.Z);
+                        else
+                            pos = GetOffsetFromEntityInWorldCoords(Game.PlayerPed.Handle, (CameraOffsets[index].Key.X + xOffset), (CameraOffsets[index].Key.Y + yOffset), CameraOffsets[index].Key.Z);
+                        Vector3 pointAt = GetOffsetFromEntityInWorldCoords(Game.PlayerPed.Handle, CameraOffsets[index].Value.X, CameraOffsets[index].Value.Y, CameraOffsets[index].Value.Z);
+
+                        if (Game.IsControlPressed(0, Control.MoveLeftOnly))
+                        {
+                            Game.PlayerPed.Task.LookAt(GetOffsetFromEntityInWorldCoords(Game.PlayerPed.Handle, 1.2f, .5f, .7f), 1100);
+                        }
+                        else if (Game.IsControlPressed(0, Control.MoveRightOnly))
+                        {
+                            Game.PlayerPed.Task.LookAt(GetOffsetFromEntityInWorldCoords(Game.PlayerPed.Handle, -1.2f, .5f, .7f), 1100);
+                        }
+                        else
+                        {
+                            Game.PlayerPed.Task.LookAt(GetOffsetFromEntityInWorldCoords(Game.PlayerPed.Handle, 0f, .5f, .7f), 1100);
+                        }
+
+                        if (Game.IsControlJustReleased(0, Control.Jump))
+                        {
+                            var Pos = Game.PlayerPed.Position;
+                            SetEntityCollision(Game.PlayerPed.Handle, true, true);
+                            FreezeEntityPosition(Game.PlayerPed.Handle, false);
+                            TaskGoStraightToCoord(Game.PlayerPed.Handle, Pos.X, Pos.Y, Pos.Z, 8f, 1600, Game.PlayerPed.Heading + 180f, 0.1f);
+                            int timer = GetGameTimer();
+                            while (true)
+                            {
+                                await Delay(0);
+                                //DisplayRadar(false);
+                                Game.DisableAllControlsThisFrame(0);
+                                if (GetGameTimer() - timer > 1600)
+                                {
+                                    break;
+                                }
+                            }
+                            ClearPedTasks(Game.PlayerPed.Handle);
+                            Game.PlayerPed.PositionNoOffset = Pos;
+                            FreezeEntityPosition(Game.PlayerPed.Handle, true);
+                            SetEntityCollision(Game.PlayerPed.Handle, false, false);
+                            reverseCamera = !reverseCamera;
+                        }
+
+                        SetEntityCollision(Game.PlayerPed.Handle, false, false);
+                        //Game.PlayerPed.IsInvincible = true;
+                        Game.PlayerPed.IsPositionFrozen = true;
+
+                        if (!DoesCamExist(CurrentCam))
+                        {
+                            CurrentCam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true);
+                            camera = new Camera(CurrentCam)
+                            {
+                                Position = pos,
+                                FieldOfView = CameraFov
+                            };
+                            camera.PointAt(pointAt);
+                            RenderScriptCams(true, false, 0, false, false);
+                            camera.IsActive = true;
+                        }
+                        else
+                        {
+                            if (camera.Position != pos)
+                            {
+                                await UpdateCamera(camera, pos, pointAt);
                             }
                         }
                     }
-                    DisplayRadar(IsRadarPreferenceSwitchedOn());
-                    RenderScriptCams(false, false, 0, false, false);
-                    camera.Delete();
-                    DestroyAllCams(true);
-                    ClearPedTasksImmediately(Game.PlayerPed.Handle);
-                    SetEntityCollision(Game.PlayerPed.Handle, true, true);
-                    FreezeEntityPosition(Game.PlayerPed.Handle, false);
-                    SetEntityInvincible(Game.PlayerPed.Handle, false);
 
+                    SetEntityCollision(Game.PlayerPed.Handle, true, true);
+
+                    Game.PlayerPed.IsPositionFrozen = false;
+
+                    DisplayHud(true);
+                    DisplayRadar(true);
+
+                    if (HasAnimDictLoaded("anim@random@shop_clothes@watches"))
+                    {
+                        RemoveAnimDict("anim@random@shop_clothes@watches");
+                    }
+
+                    reverseCamera = false;
+                }
+                else
+                {
+                    if (camera != null)
+                    {
+                        ClearCamera();
+                        camera = null;
+                    }
                 }
             }
         }
+
+        private int GetCameraIndex(Menu menu)
+        {
+            if (menu != null)
+            {
+                if (menu == MainMenu.MpPedCustomizationMenu.inheritanceMenu)
+                {
+                    return 1;
+                }
+                else if (menu == MainMenu.MpPedCustomizationMenu.clothesMenu)
+                {
+                    switch (menu.CurrentIndex)
+                    {
+                        case 0: // masks
+                            return 1;
+                        case 1: // upper body
+                            return 2;
+                        case 2: // lower body
+                            return 3;
+                        case 3: // bags & parachutes
+                            return 2;
+                        case 4: // shoes
+                            return 4;
+                        case 5: // scarfs & chains
+                            return 2;
+                        case 6: // shirt & accessory
+                            return 2;
+                        case 7: // body armor & accessory
+                            return 2;
+                        case 8: // badges & logos
+                            return 0;
+                        case 9: // shirt overlay & jackets
+                            return 2;
+                        default:
+                            return 0;
+                    }
+                }
+                else if (menu == MainMenu.MpPedCustomizationMenu.propsMenu)
+                {
+                    switch (menu.CurrentIndex)
+                    {
+                        case 0: // hats & helmets
+                        case 1: // glasses
+                        case 2: // misc props
+                            return 1;
+                        case 3: // watches
+                            return reverseCamera ? 5 : 6;
+                        case 4: // bracelets
+                            return 5;
+                        default:
+                            return 0;
+                    }
+                }
+                else if (menu == MainMenu.MpPedCustomizationMenu.appearanceMenu)
+                {
+                    switch (menu.CurrentIndex)
+                    {
+                        case 0: // hair style
+                        case 1: // hair color
+                        case 2: // hair highlight color
+                        case 3: // blemishes
+                        case 4: // blemishes opacity
+                        case 5: // beard style
+                        case 6: // beard opacity
+                        case 7: // beard color
+                        case 8: // eyebrows style
+                        case 9: // eyebrows opacity
+                        case 10: // eyebrows color
+                        case 11: // ageing style
+                        case 12: // ageing opacity
+                        case 13: // makeup style
+                        case 14: // makeup opacity
+                        case 15: // makeup color
+                        case 16: // blush style
+                        case 17: // blush opacity
+                        case 18: // blush color
+                        case 19: // complexion style
+                        case 20: // complexion opacity
+                        case 21: // sun damage style
+                        case 22: // sun damage opacity
+                        case 23: // lipstick style
+                        case 24: // lipstick opacity
+                        case 25: // lipstick color
+                        case 26: // moles and freckles style
+                        case 27: // moles and freckles opacity
+                            return 1;
+                        case 28: // chest hair style
+                        case 29: // chest hair opacity
+                        case 30: // chest hair color
+                        case 31: // body blemishes style
+                        case 32: // body blemishes opacity
+                            return 2;
+                        case 33: // eye colors
+                            return 1;
+                        default:
+                            return 0;
+                    }
+                }
+                else if (menu == MainMenu.MpPedCustomizationMenu.tattoosMenu)
+                {
+                    switch (menu.CurrentIndex)
+                    {
+                        case 0: // head
+                            return 1;
+                        case 1: // torso
+                            return 2;
+                        case 2: // left arm
+                        case 3: // right arm
+                            return 6;
+                        case 4: // left leg 
+                        case 5: // right leg
+                            return 3;
+                        case 6: // badges
+                            return 2;
+                        default:
+                            return 0;
+                    }
+                }
+                else if (menu == MainMenu.MpPedCustomizationMenu.faceShapeMenu)
+                {
+                    MenuItem item = menu.GetCurrentMenuItem();
+                    if (item != null)
+                    {
+                        if (item.GetType() == typeof(MenuSliderItem))
+                        {
+                            return 1;
+                        }
+                    }
+                    return 0;
+                }
+            }
+            return 0;
+        }
+
+        internal static void ClearCamera()
+        {
+            camera.IsActive = false;
+            RenderScriptCams(false, false, 0, false, false);
+            DestroyCam(CurrentCam, false);
+            CurrentCam = -1;
+            camera.Delete();
+        }
+
+        /// <summary>
+        /// Disables movement while the mp character creator is open.
+        /// </summary>
+        /// <returns></returns>
+        [Tick]
+        private async Task DisableMovement()
+        {
+            if (IsMpCharEditorOpen())
+            {
+                Game.DisableControlThisFrame(0, Control.MoveDown);
+                Game.DisableControlThisFrame(0, Control.MoveDownOnly);
+                Game.DisableControlThisFrame(0, Control.MoveLeft);
+                Game.DisableControlThisFrame(0, Control.MoveLeftOnly);
+                Game.DisableControlThisFrame(0, Control.MoveLeftRight);
+                Game.DisableControlThisFrame(0, Control.MoveRight);
+                Game.DisableControlThisFrame(0, Control.MoveRightOnly);
+                Game.DisableControlThisFrame(0, Control.MoveUp);
+                Game.DisableControlThisFrame(0, Control.MoveUpDown);
+                Game.DisableControlThisFrame(0, Control.MoveUpOnly);
+                Game.DisableControlThisFrame(0, Control.NextCamera);
+                Game.DisableControlThisFrame(0, Control.LookBehind);
+                Game.DisableControlThisFrame(0, Control.LookDown);
+                Game.DisableControlThisFrame(0, Control.LookDownOnly);
+                Game.DisableControlThisFrame(0, Control.LookLeft);
+                Game.DisableControlThisFrame(0, Control.LookLeftOnly);
+                Game.DisableControlThisFrame(0, Control.LookLeftRight);
+                Game.DisableControlThisFrame(0, Control.LookRight);
+                Game.DisableControlThisFrame(0, Control.LookRightOnly);
+                Game.DisableControlThisFrame(0, Control.LookUp);
+                Game.DisableControlThisFrame(0, Control.LookUpDown);
+                Game.DisableControlThisFrame(0, Control.LookUpOnly);
+                Game.DisableControlThisFrame(0, Control.Aim);
+                Game.DisableControlThisFrame(0, Control.AccurateAim);
+                Game.DisableControlThisFrame(0, Control.Cover);
+                Game.DisableControlThisFrame(0, Control.Duck);
+                Game.DisableControlThisFrame(0, Control.Jump);
+                Game.DisableControlThisFrame(0, Control.SelectNextWeapon);
+                Game.DisableControlThisFrame(0, Control.PrevWeapon);
+                Game.DisableControlThisFrame(0, Control.WeaponSpecial);
+                Game.DisableControlThisFrame(0, Control.WeaponSpecial2);
+                Game.DisableControlThisFrame(0, Control.WeaponWheelLeftRight);
+                Game.DisableControlThisFrame(0, Control.WeaponWheelNext);
+                Game.DisableControlThisFrame(0, Control.WeaponWheelPrev);
+                Game.DisableControlThisFrame(0, Control.WeaponWheelUpDown);
+                Game.DisableControlThisFrame(0, Control.VehicleExit);
+                Game.DisableControlThisFrame(0, Control.Enter);
+            }
+            else
+            {
+                await Delay(0);
+            }
+        }
         #endregion
+
         #region Restore player skin & weapons after respawning.
+        /// <summary>
+        /// Restores player appearance after dying.
+        /// </summary>
+        /// <returns></returns>
         private async Task RestorePlayerAfterBeingDead()
         {
-            if (Game.PlayerPed.IsDead)
+            if (MainMenu.PermissionsSetupComplete && Game.PlayerPed.IsDead)
             {
                 if (MainMenu.MiscSettingsMenu != null)
                 {
@@ -1554,7 +2046,7 @@ namespace vMenuClient
                     {
                         if (MainMenu.MiscSettingsMenu.RestorePlayerAppearance && IsAllowed(Permission.MSRestoreAppearance))
                         {
-                            SavePed("vMenu_tmp_saved_ped");
+                            await SavePed("vMenu_tmp_saved_ped");
                         }
                     }
 
@@ -1588,240 +2080,367 @@ namespace vMenuClient
                         }
                     }
 
-                    if (MainMenu.MiscSettingsMenu.RestorePlayerWeapons && IsAllowed(Permission.MSRestoreWeapons) || (MainMenu.WeaponLoadoutsMenu.WeaponLoadoutsSetLoadoutOnRespawn && IsAllowed(Permission.WLEquipOnRespawn)))
+                    if (MainMenu.MiscSettingsMenu != null && MainMenu.MiscSettingsMenu.RestorePlayerWeapons && IsAllowed(Permission.MSRestoreWeapons) || (MainMenu.WeaponLoadoutsMenu != null && MainMenu.WeaponLoadoutsMenu.WeaponLoadoutsSetLoadoutOnRespawn && IsAllowed(Permission.WLEquipOnRespawn)))
                     {
-                        await SpawnWeaponLoadoutAsync("vmenu_temp_weapons_loadout_before_respawn", true);
+                        await SpawnWeaponLoadoutAsync("vmenu_temp_weapons_loadout_before_respawn", true, false, false);
                         Log("weapons restored, deleting kvp");
                         DeleteResourceKvp("vmenu_temp_weapons_loadout_before_respawn");
                     }
-
-
                 }
-
             }
         }
         #endregion
+
         #region Player clothing animations controller.
         private async Task PlayerClothingAnimationsController()
         {
-            if (!DecorIsRegisteredAsType(clothingAnimationDecor, 3))
+            if (MainMenu.PermissionsSetupComplete)
             {
-                DecorRegister(clothingAnimationDecor, 3);
-            }
-            else
-            {
-                DecorSetInt(Game.PlayerPed.Handle, clothingAnimationDecor, PlayerAppearance.ClothingAnimationType);
-                foreach (Player player in Players)
+                if (!DecorIsRegisteredAsType(clothingAnimationDecor, 3))
                 {
-                    Ped p = player.Character;
-                    if (p != null && p.Exists() && !p.IsDead)
+                    try
                     {
-                        // CommonFunctions.Log($"Player {player.Name}, is {(DecorExistOn(p.Handle, clothingAnimationDecor) ? "registered" : "not registered")}");
-
-                        if (DecorExistOn(p.Handle, clothingAnimationDecor))
-                        {
-                            int decorVal = DecorGetInt(p.Handle, clothingAnimationDecor);
-                            if (decorVal == 0) // on solid/no animation.
-                            {
-                                SetPedIlluminatedClothingGlowIntensity(p.Handle, 1f);
-                            }
-                            else if (decorVal == 1) // off.
-                            {
-                                SetPedIlluminatedClothingGlowIntensity(p.Handle, 0f);
-                            }
-                            else if (decorVal == 2) // fade.
-                            {
-                                SetPedIlluminatedClothingGlowIntensity(p.Handle, clothingOpacity);
-                            }
-                            else if (decorVal == 3) // flash.
-                            {
-                                float result = 0f;
-                                if (clothingAnimationReverse)
-                                {
-                                    if ((clothingOpacity >= 0f && clothingOpacity <= 0.5f)) // || (clothingOpacity >= 0.5f && clothingOpacity <= 0.75f))
-                                    {
-                                        result = 1f;
-                                    }
-                                }
-                                else
-                                {
-                                    if ((clothingOpacity >= 0.5f && clothingOpacity <= 1.0f)) //|| (clothingOpacity >= 0.75f && clothingOpacity <= 1.0f))
-                                    {
-                                        result = 1f;
-                                    }
-                                }
-                                SetPedIlluminatedClothingGlowIntensity(p.Handle, result);
-                            }
-                        }
+                        DecorRegister(clothingAnimationDecor, 3);
                     }
-                }
-                if (clothingAnimationReverse)
-                {
-                    clothingOpacity -= 0.05f;
-                    if (clothingOpacity < 0f)
+                    catch (Exception e)
                     {
-                        clothingOpacity = 0f;
-                        clothingAnimationReverse = false;
+                        Debug.WriteLine(@"[CRITICAL] A critical bug in one of your scripts was detected. vMenu is unable to set or register a decorator's value because another resource has already registered 1.5k or more decorators. vMenu will NOT work as long as this bug in your other scripts is unsolved. Please fix your other scripts. This is *NOT* caused by or fixable by vMenu!!!");
+                        Debug.WriteLine($"Error Location: {e.StackTrace}\nError info: {e.Message.ToString()}");
+                        await Delay(1000);
+                    }
+                    while (!DecorIsRegisteredAsType(clothingAnimationDecor, 3))
+                    {
+                        await Delay(0);
                     }
                 }
                 else
                 {
-                    clothingOpacity += 0.05f;
-                    if (clothingOpacity > 1f)
+                    try
                     {
-                        clothingOpacity = 1f;
-                        clothingAnimationReverse = true;
+                        DecorSetInt(Game.PlayerPed.Handle, clothingAnimationDecor, PlayerAppearance.ClothingAnimationType);
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.WriteLine(@"[CRITICAL] A critical bug in one of your scripts was detected. vMenu is unable to set or register a decorator's value because another resource has already registered 1.5k or more decorators. vMenu will NOT work as long as this bug in your other scripts is unsolved. Please fix your other scripts. This is *NOT* caused by or fixable by vMenu!!!");
+                        Debug.WriteLine($"Error Location: {e.StackTrace}\nError info: {e.Message.ToString()}");
+                        await Delay(1000);
+                    }
+                    foreach (Player player in Players)
+                    {
+                        Ped p = player.Character;
+                        if (p != null && p.Exists() && !p.IsDead)
+                        {
+                            // CommonFunctions.Log($"Player {player.Name}, is {(DecorExistOn(p.Handle, clothingAnimationDecor) ? "registered" : "not registered")}");
+
+                            if (DecorExistOn(p.Handle, clothingAnimationDecor))
+                            {
+                                int decorVal = DecorGetInt(p.Handle, clothingAnimationDecor);
+                                if (decorVal == 0) // on solid/no animation.
+                                {
+                                    SetPedIlluminatedClothingGlowIntensity(p.Handle, 1f);
+                                }
+                                else if (decorVal == 1) // off.
+                                {
+                                    SetPedIlluminatedClothingGlowIntensity(p.Handle, 0f);
+                                }
+                                else if (decorVal == 2) // fade.
+                                {
+                                    SetPedIlluminatedClothingGlowIntensity(p.Handle, clothingOpacity);
+                                }
+                                else if (decorVal == 3) // flash.
+                                {
+                                    float result = 0f;
+                                    if (clothingAnimationReverse)
+                                    {
+                                        if ((clothingOpacity >= 0f && clothingOpacity <= 0.5f)) // || (clothingOpacity >= 0.5f && clothingOpacity <= 0.75f))
+                                        {
+                                            result = 1f;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        if ((clothingOpacity >= 0.5f && clothingOpacity <= 1.0f)) //|| (clothingOpacity >= 0.75f && clothingOpacity <= 1.0f))
+                                        {
+                                            result = 1f;
+                                        }
+                                    }
+                                    SetPedIlluminatedClothingGlowIntensity(p.Handle, result);
+                                }
+                            }
+                        }
+                    }
+                    if (clothingAnimationReverse)
+                    {
+                        clothingOpacity -= 0.05f;
+                        if (clothingOpacity < 0f)
+                        {
+                            clothingOpacity = 0f;
+                            clothingAnimationReverse = false;
+                        }
+                    }
+                    else
+                    {
+                        clothingOpacity += 0.05f;
+                        if (clothingOpacity > 1f)
+                        {
+                            clothingOpacity = 1f;
+                            clothingAnimationReverse = true;
+                        }
+                    }
+                    int timer = GetGameTimer();
+                    while (GetGameTimer() - timer < 25)
+                    {
+                        await Delay(0);
                     }
                 }
-                int timer = GetGameTimer();
-                while (GetGameTimer() - timer < 25)
+                try
                 {
-                    await Delay(0);
+                    DecorSetInt(Game.PlayerPed.Handle, clothingAnimationDecor, PlayerAppearance.ClothingAnimationType);
+                }
+                catch (Exception e)
+                {
+                    Debug.WriteLine(@"[CRITICAL] A critical bug in one of your scripts was detected. vMenu is unable to set or register a decorator's value because another resource has already registered 1.5k or more decorators. vMenu will NOT work as long as this bug in your other scripts is unsolved. Please fix your other scripts. This is *NOT* caused by or fixable by vMenu!!!");
+                    Debug.WriteLine($"Error Location: {e.StackTrace}\nError info: {e.Message.ToString()}");
+                    await Delay(1000);
                 }
             }
-            DecorSetInt(Game.PlayerPed.Handle, clothingAnimationDecor, PlayerAppearance.ClothingAnimationType);
         }
-
         #endregion
+
         #region player blips tasks
         private async Task PlayerBlipsControl()
         {
-            if (DecorIsRegisteredAsType("vmenu_player_blip_sprite_id", 3))
+            if (MainMenu.PermissionsSetupComplete)
             {
-
-                int sprite = 1;
-                if (IsPedInAnyVehicle(Game.PlayerPed.Handle, false))
+                if (DecorIsRegisteredAsType("vmenu_player_blip_sprite_id", 3))
                 {
-                    Vehicle veh = GetVehicle();
-                    if (veh != null && veh.Exists())
+                    int sprite = 1;
+                    if (IsPedInAnyVehicle(Game.PlayerPed.Handle, false))
                     {
-                        sprite = BlipInfo.GetBlipSpriteForVehicle(veh.Handle);
-                    }
-                }
-
-                DecorSetInt(Game.PlayerPed.Handle, "vmenu_player_blip_sprite_id", sprite);
-
-                if (MainMenu.MiscSettingsMenu != null)
-                {
-                    bool enabled = MainMenu.MiscSettingsMenu.ShowPlayerBlips && IsAllowed(Permission.MSPlayerBlips);
-
-                    foreach (Player p in MainMenu.PlayersList)
-                    {
-                        // continue only if this player is valid.
-                        if (p != null && NetworkIsPlayerActive(p.Handle) && p.Character != null && p.Character.Exists())
+                        Vehicle veh = GetVehicle();
+                        if (veh != null && veh.Exists())
                         {
+                            sprite = BlipInfo.GetBlipSpriteForVehicle(veh.Handle);
+                        }
+                    }
+                    try
+                    {
+                        DecorSetInt(Game.PlayerPed.Handle, "vmenu_player_blip_sprite_id", sprite);
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.WriteLine(@"[CRITICAL] A critical bug in one of your scripts was detected. vMenu is unable to set or register a decorator's value because another resource has already registered 1.5k or more decorators. vMenu will NOT work as long as this bug in your other scripts is unsolved. Please fix your other scripts. This is *NOT* caused by or fixable by vMenu!!!");
+                        Debug.WriteLine($"Error Location: {e.StackTrace}\nError info: {e.Message.ToString()}");
+                        await Delay(1000);
+                    }
 
-                            //    
-                            //else
-                            //    SetBlipDisplay(blip, 3);
+                    if (MainMenu.MiscSettingsMenu != null)
+                    {
+                        bool enabled = MainMenu.MiscSettingsMenu.ShowPlayerBlips && IsAllowed(Permission.MSPlayerBlips);
 
-                            // if blips are enabled and the player has permisisons to use them.
-                            if (enabled)
+                        foreach (Player p in MainMenu.PlayersList)
+                        {
+                            // continue only if this player is valid.
+                            if (p != null && NetworkIsPlayerActive(p.Handle) && p.Character != null && p.Character.Exists())
                             {
-                                if (p != Game.Player)
+
+                                //    
+                                //else
+                                //    SetBlipDisplay(blip, 3);
+
+                                // if blips are enabled and the player has permisisons to use them.
+                                if (enabled)
                                 {
-                                    int ped = p.Character.Handle;
-                                    int blip = GetBlipFromEntity(ped);
-
-                                    // if blip id is invalid.
-                                    if (blip < 1)
+                                    if (p != Game.Player)
                                     {
-                                        blip = AddBlipForEntity(ped);
-                                    }
-                                    // only manage the blip for this player if the player is nearby
-                                    if (p.Character.Position.DistanceToSquared2D(Game.PlayerPed.Position) < 500000 || Game.IsPaused)
-                                    {
-                                        // (re)set the blip color in case something changed it.
-                                        SetBlipColour(blip, 0);
+                                        int ped = p.Character.Handle;
+                                        int blip = GetBlipFromEntity(ped);
 
-                                        // if the decorator exists on this player, use the decorator value to determine what the blip sprite should be.
-                                        if (DecorExistOn(p.Character.Handle, "vmenu_player_blip_sprite_id"))
+                                        // if blip id is invalid.
+                                        if (blip < 1)
                                         {
-                                            int decorSprite = DecorGetInt(p.Character.Handle, "vmenu_player_blip_sprite_id");
-                                            // set the sprite according to the decorator value.
-                                            SetBlipSprite(blip, decorSprite);
-
-                                            // show heading on blip only if the player is on foot (blip sprite 1)
-                                            ShowHeadingIndicatorOnBlip(blip, decorSprite == 1);
-
-                                            // set the blip rotation if the player is not in a helicopter (sprite 422).
-                                            if (decorSprite != 422)
-                                            {
-                                                SetBlipRotation(blip, (int)GetEntityHeading(ped));
-                                            }
+                                            blip = AddBlipForEntity(ped);
                                         }
-                                        else // backup method for when the decorator value is not found.
+                                        // only manage the blip for this player if the player is nearby
+                                        if (p.Character.Position.DistanceToSquared2D(Game.PlayerPed.Position) < 500000 || Game.IsPaused)
                                         {
-                                            // set the blip sprite using the backup method in case decorators failed.
-                                            SetCorrectBlipSprite(ped, blip);
+                                            // (re)set the blip color in case something changed it.
+                                            SetBlipColour(blip, 0);
 
-                                            // only show the heading indicator if the player is NOT in a vehicle.
-                                            if (!IsPedInAnyVehicle(ped, false))
+                                            // if the decorator exists on this player, use the decorator value to determine what the blip sprite should be.
+                                            if (DecorExistOn(p.Character.Handle, "vmenu_player_blip_sprite_id"))
                                             {
-                                                ShowHeadingIndicatorOnBlip(blip, true);
-                                            }
-                                            else
-                                            {
-                                                ShowHeadingIndicatorOnBlip(blip, false);
+                                                int decorSprite = DecorGetInt(p.Character.Handle, "vmenu_player_blip_sprite_id");
+                                                // set the sprite according to the decorator value.
+                                                SetBlipSprite(blip, decorSprite);
 
-                                                // If the player is not in a helicopter, set the blip rotation.
-                                                if (!p.Character.IsInHeli)
+                                                // show heading on blip only if the player is on foot (blip sprite 1)
+                                                ShowHeadingIndicatorOnBlip(blip, decorSprite == 1);
+
+                                                // set the blip rotation if the player is not in a helicopter (sprite 422).
+                                                if (decorSprite != 422)
                                                 {
                                                     SetBlipRotation(blip, (int)GetEntityHeading(ped));
                                                 }
                                             }
+                                            else // backup method for when the decorator value is not found.
+                                            {
+                                                // set the blip sprite using the backup method in case decorators failed.
+                                                SetCorrectBlipSprite(ped, blip);
+
+                                                // only show the heading indicator if the player is NOT in a vehicle.
+                                                if (!IsPedInAnyVehicle(ped, false))
+                                                {
+                                                    ShowHeadingIndicatorOnBlip(blip, true);
+                                                }
+                                                else
+                                                {
+                                                    ShowHeadingIndicatorOnBlip(blip, false);
+
+                                                    // If the player is not in a helicopter, set the blip rotation.
+                                                    if (!p.Character.IsInHeli)
+                                                    {
+                                                        SetBlipRotation(blip, (int)GetEntityHeading(ped));
+                                                    }
+                                                }
+                                            }
+
+                                            // set the player name.
+                                            SetBlipNameToPlayerName(blip, p.Handle);
+
+                                            // thanks lambda menu for hiding this great feature in their source code!
+                                            // sets the blip category to 7, which makes the blips group under "Other Players:"
+                                            SetBlipCategory(blip, 7);
+
+                                            //N_0x75a16c3da34f1245(blip, false); // unknown
+
+                                            // display on minimap and main map.
+                                            SetBlipDisplay(blip, 6);
                                         }
-
-                                        // set the player name.
-                                        SetBlipNameToPlayerName(blip, p.Handle);
-
-                                        // thanks lambda menu for hiding this great feature in their source code!
-                                        // sets the blip category to 7, which makes the blips group under "Other Players:"
-                                        SetBlipCategory(blip, 7);
-
-                                        //N_0x75a16c3da34f1245(blip, false); // unknown
-
-                                        // display on minimap and main map.
-                                        SetBlipDisplay(blip, 6);
+                                        else
+                                        {
+                                            // hide it from the minimap.
+                                            SetBlipDisplay(blip, 3);
+                                        }
                                     }
-                                    else
+                                }
+                                else // blips are not enabled.
+                                {
+                                    if (!(p.Character.AttachedBlip == null || !p.Character.AttachedBlip.Exists()) && MainMenu.OnlinePlayersMenu != null && !MainMenu.OnlinePlayersMenu.PlayersWaypointList.Contains(p.Handle))
                                     {
-                                        // hide it from the minimap.
-                                        SetBlipDisplay(blip, 3);
+                                        p.Character.AttachedBlip.Delete(); // remove player blip if it exists.
                                     }
                                 }
                             }
-                            else // blips are not enabled.
+                        }
+                    }
+                    else // misc settings is null
+                    {
+                        await Delay(1000);
+                    }
+                }
+                else // decorator does not exist.
+                {
+                    try
+                    {
+                        DecorRegister("vmenu_player_blip_sprite_id", 3);
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.WriteLine(@"[CRITICAL] A critical bug in one of your scripts was detected. vMenu is unable to set or register a decorator's value because another resource has already registered 1.5k or more decorators. vMenu will NOT work as long as this bug in your other scripts is unsolved. Please fix your other scripts. This is *NOT* caused by or fixable by vMenu!!!");
+                        Debug.WriteLine($"Error Location: {e.StackTrace}\nError info: {e.Message.ToString()}");
+                        await Delay(1000);
+                    }
+                    while (!DecorIsRegisteredAsType("vmenu_player_blip_sprite_id", 3))
+                    {
+                        await Delay(0);
+                    }
+                }
+            }
+        }
+
+        #endregion
+
+        #region player overhead names
+        private Dictionary<Player, int> gamerTags = new Dictionary<Player, int>();
+
+        private float distance = GetSettingsFloat(Setting.vmenu_player_names_distance) > 10f ? GetSettingsFloat(Setting.vmenu_player_names_distance) : 500f; // todo make this a convar.
+
+
+        /// <summary>
+        /// Manages overhead player names.
+        /// </summary>
+        /// <returns></returns>
+        private async Task PlayerOverheadNamesControl()
+        {
+            await Delay(500);
+
+            if (MainMenu.PermissionsSetupComplete && MainMenu.ConfigOptionsSetupComplete && MainMenu.MiscSettingsMenu != null)
+            {
+                bool enabled = MainMenu.MiscSettingsMenu.MiscShowOverheadNames;
+                if (!enabled)
+                {
+                    for (var i = 0; i < 255; i++)
+                    {
+                        RemoveMpGamerTag(i);
+                    }
+                }
+                else
+                {
+                    //Debug.WriteLine($"Distance: {distance}");
+
+                    foreach (Player p in Players)
+                    {
+                        if (p != Game.Player)
+                        {
+                            var dist = p.Character.Position.DistanceToSquared(Game.PlayerPed.Position);
+                            //Debug.WriteLine($"Dist: {dist}");
+                            bool closeEnough = dist < distance;
+                            if (gamerTags.ContainsKey(p))
                             {
-                                if (!(p.Character.AttachedBlip == null || !p.Character.AttachedBlip.Exists()) && MainMenu.OnlinePlayersMenu != null && !MainMenu.OnlinePlayersMenu.PlayersWaypointList.Contains(p.Handle))
+                                if (!closeEnough)
                                 {
-                                    p.Character.AttachedBlip.Delete(); // remove player blip if it exists.
+                                    RemoveMpGamerTag(gamerTags[p]);
+                                    gamerTags.Remove(p);
+                                }
+                                else
+                                {
+                                    gamerTags[p] = CreateMpGamerTag(p.Character.Handle, p.Name + $" [{p.ServerId}]", false, false, "", 0);
+                                }
+                            }
+                            else if (closeEnough)
+                            {
+                                gamerTags.Add(p, CreateMpGamerTag(p.Character.Handle, p.Name + $" [{p.ServerId}]", false, false, "", 0));
+                            }
+                            if (closeEnough && gamerTags.ContainsKey(p))
+                            {
+                                SetMpGamerTagVisibility(gamerTags[p], 2, true); // healthArmor
+                                if (p.WantedLevel > 0)
+                                {
+                                    SetMpGamerTagVisibility(gamerTags[p], 7, true); // wantedStars
+                                    SetMpGamerTagWantedLevel(gamerTags[p], GetPlayerWantedLevel(p.Handle));
+                                }
+                                else
+                                {
+                                    SetMpGamerTagVisibility(gamerTags[p], 7, false); // wantedStars
                                 }
                             }
                         }
                     }
                 }
-                else // misc settings is null
-                {
-                    await Delay(1000);
-                }
-            }
-            else // decorator does not exist.
-            {
-                DecorRegister("vmenu_player_blip_sprite_id", 3);
-                while (!DecorIsRegisteredAsType("vmenu_player_blip_sprite_id", 3))
-                {
-                    await Delay(0);
-                }
             }
         }
-
         #endregion
+
         #region Online Player Options Tasks
+        /// <summary>
+        /// Manages online players tasks.
+        /// </summary>
+        /// <returns></returns>
         private async Task OnlinePlayersTasks()
         {
             await Delay(500);
-            if (MainMenu.OnlinePlayersMenu != null && MainMenu.OnlinePlayersMenu.PlayersWaypointList.Count > 0)
+            if (MainMenu.PermissionsSetupComplete && MainMenu.OnlinePlayersMenu != null && MainMenu.OnlinePlayersMenu.PlayersWaypointList.Count > 0)
             {
                 foreach (int playerId in MainMenu.OnlinePlayersMenu.PlayersWaypointList)
                 {
@@ -1859,8 +2478,9 @@ namespace vMenuClient
             }
         }
         #endregion
-        #region Flares and plane bombs controler
 
+        #region Flares and plane bombs controler (UNUSED)
+        /*
         private readonly List<uint> flareVehicles = new List<uint>()
         {
             (uint)GetHashKey("mogul"),
@@ -1964,7 +2584,9 @@ namespace vMenuClient
                 await Delay(1);
             }
         }
+        */
         #endregion
+
         #region Tick related to animations and interactions in-game
         /// <summary>
         /// Manages (triggers) all interactions and animations that happen in the world without direct use of the menu.
@@ -1972,680 +2594,650 @@ namespace vMenuClient
         /// <returns></returns>
         private async Task AnimationsAndInteractions()
         {
-
-            if (!(MenuController.IsAnyMenuOpen() || MainMenu.DontOpenMenus || !Fading.IsFadedIn || Game.IsPaused || IsPlayerSwitchInProgress() || Game.PlayerPed.IsDead))
+            if (MainMenu.PermissionsSetupComplete)
             {
-                // snowballs
-                if (Game.IsControlJustReleased(0, Control.Detonate))
+                if (!(MenuController.IsAnyMenuOpen() || MainMenu.DontOpenMenus || !Fading.IsFadedIn || Game.IsPaused || IsPlayerSwitchInProgress() || Game.PlayerPed.IsDead))
                 {
-                    if (World.NextWeather == Weather.Christmas)
+                    // snowballs
+                    if (Game.IsControlJustReleased(0, Control.Detonate))
                     {
-                        if (!(Game.PlayerPed.IsInVehicle() || Game.PlayerPed.IsDead || !Fading.IsFadedIn || IsPlayerSwitchInProgress() || Game.IsPaused
-                            || GetInteriorFromEntity(Game.PlayerPed.Handle) != 0 || !Game.PlayerPed.IsOnFoot || Game.PlayerPed.IsInParachuteFreeFall ||
-                            Game.PlayerPed.IsFalling || Game.PlayerPed.IsBeingStunned || Game.PlayerPed.IsWalking || Game.PlayerPed.IsRunning ||
-                            Game.PlayerPed.IsSprinting || Game.PlayerPed.IsSwimming || Game.PlayerPed.IsSwimmingUnderWater || Game.PlayerPed.IsDiving && GetSelectedPedWeapon(Game.PlayerPed.Handle) == snowball_hash || GetSelectedPedWeapon(Game.PlayerPed.Handle) == GetHashKey("unarmed")))
+                        if (World.NextWeather == Weather.Christmas)
                         {
-                            await PickupSnowball();
+                            if (!(Game.PlayerPed.IsInVehicle() || Game.PlayerPed.IsDead || !Fading.IsFadedIn || IsPlayerSwitchInProgress() || Game.IsPaused
+                                || GetInteriorFromEntity(Game.PlayerPed.Handle) != 0 || !Game.PlayerPed.IsOnFoot || Game.PlayerPed.IsInParachuteFreeFall ||
+                                Game.PlayerPed.IsFalling || Game.PlayerPed.IsBeingStunned || Game.PlayerPed.IsWalking || Game.PlayerPed.IsRunning ||
+                                Game.PlayerPed.IsSprinting || Game.PlayerPed.IsSwimming || Game.PlayerPed.IsSwimmingUnderWater || Game.PlayerPed.IsDiving && GetSelectedPedWeapon(Game.PlayerPed.Handle) == snowball_hash || GetSelectedPedWeapon(Game.PlayerPed.Handle) == GetHashKey("unarmed")))
+                            {
+                                await PickupSnowballOnce();
+                            }
                         }
                     }
-                }
-                // helmet visor
-                if (Game.IsControlPressed(0, Control.SwitchVisor))
-                {
-                    int timer = GetGameTimer();
-                    while (!(MenuController.IsAnyMenuOpen() || MainMenu.DontOpenMenus || !Fading.IsFadedIn || Game.IsPaused || IsPlayerSwitchInProgress() || Game.PlayerPed.IsDead) && Game.IsControlPressed(0, Control.SwitchVisor))
+                    // helmet visor
+                    if (Game.IsControlPressed(0, Control.SwitchVisor))
                     {
-                        await Delay(0);
-                        if (GetGameTimer() - timer > 400)
+                        int timer = GetGameTimer();
+                        while (!(MenuController.IsAnyMenuOpen() || MainMenu.DontOpenMenus || !Fading.IsFadedIn || Game.IsPaused || IsPlayerSwitchInProgress() || Game.PlayerPed.IsDead) && Game.IsControlPressed(0, Control.SwitchVisor))
                         {
-                            await SwitchHelmet();
-                            break;
+                            await Delay(0);
+                            Vehicle veh = GetVehicle();
+                            bool inVeh = veh != null && (veh.Model.IsBike || veh.Model.IsBicycle || veh.Model.IsQuadbike);
+                            if (GetGameTimer() - timer > 380 && inVeh)
+                            {
+                                Game.DisableControlThisFrame(2, Control.VehicleHeadlight);
+                            }
+                            if (GetGameTimer() - timer > 400)
+                            {
+                                Task t = SwitchHelmetOnce();
+                                while (!t.IsCompleted && !t.IsCanceled && !t.IsFaulted)
+                                {
+                                    if (inVeh)
+                                    {
+                                        Game.DisableControlThisFrame(2, Control.VehicleHeadlight);
+                                    }
+                                    await Delay(0);
+                                }
+                                //await SwitchHelmet();
+                                break;
+                            }
                         }
-                    }
-                    while (Game.IsControlPressed(0, Control.SwitchVisor))
-                    {
-                        await Delay(0);
+                        while (Game.IsControlPressed(0, Control.SwitchVisor))
+                        {
+                            await Delay(0);
+                        }
                     }
                 }
             }
         }
         #endregion
+
         #region help message controller
+        /// <summary>
+        /// Help message timer and stuff.
+        /// </summary>
+        /// <returns></returns>
         private async Task HelpMessageController()
         {
-            if (World.NextWeather == Weather.Christmas && IsAllowed(Permission.WPSnowball))
+            if (MainMenu.PermissionsSetupComplete)
             {
-                void ShowSnowballInfoMessage()
+                if (World.NextWeather == Weather.Christmas && IsAllowed(Permission.WPSnowball))
                 {
-                    int maxAmmo = 10;
-                    GetMaxAmmo(Game.PlayerPed.Handle, snowball_hash, ref maxAmmo);
-                    if (maxAmmo > GetAmmoInPedWeapon(Game.PlayerPed.Handle, snowball_hash))
+                    void ShowSnowballInfoMessage()
                     {
-                        BeginTextCommandDisplayHelp("HELP_SNOWP");
-                        AddTextComponentInteger(2);
-                        AddTextComponentInteger(maxAmmo);
-                        EndTextCommandDisplayHelp(0, false, true, 6000);
+                        int maxAmmo = 10;
+                        GetMaxAmmo(Game.PlayerPed.Handle, snowball_hash, ref maxAmmo);
+                        if (maxAmmo > GetAmmoInPedWeapon(Game.PlayerPed.Handle, snowball_hash))
+                        {
+                            BeginTextCommandDisplayHelp("HELP_SNOWP");
+                            AddTextComponentInteger(2);
+                            AddTextComponentInteger(maxAmmo);
+                            EndTextCommandDisplayHelp(0, false, true, 6000);
+                        }
+
                     }
 
-                }
-
-                // help text control for snowballs
-                if (!IsPedInAnyVehicle(Game.PlayerPed.Handle, true))
-                {
-                    if (showSnowballInfo)
+                    // help text control for snowballs
+                    if (!IsPedInAnyVehicle(Game.PlayerPed.Handle, true))
                     {
-                        BeginTextCommandIsThisHelpMessageBeingDisplayed("HELP_SNOWP");
-                        if (EndTextCommandIsThisHelpMessageBeingDisplayed(0))
+                        if (showSnowballInfo)
                         {
-                            showSnowballInfo = false;
-                            return;
+                            BeginTextCommandIsThisHelpMessageBeingDisplayed("HELP_SNOWP");
+                            if (EndTextCommandIsThisHelpMessageBeingDisplayed(0))
+                            {
+                                showSnowballInfo = false;
+                                return;
+                            }
+                            else if (IsHelpMessageBeingDisplayed())
+                            {
+                                ClearAllHelpMessages();
+                            }
+                            ShowSnowballInfoMessage();
                         }
-                        else if (IsHelpMessageBeingDisplayed())
-                        {
-                            ClearAllHelpMessages();
-                        }
-                        ShowSnowballInfoMessage();
+                        showSnowballInfo = false;
                     }
-                    showSnowballInfo = false;
+                    else
+                    {
+                        showSnowballInfo = true;
+                    }
                 }
-                else
-                {
-                    showSnowballInfo = true;
-                }
+                await Delay(100);
             }
-            await Delay(100);
         }
         #endregion
+
         #region draw model dimensions
-        Text Text1 = new Text("1", new System.Drawing.PointF(0f, 0f), 0.5f, System.Drawing.Color.FromArgb(255, 255, 255), Font.Monospace, Alignment.Center, true, true);
-        Text Text2 = new Text("2", new System.Drawing.PointF(0f, 0f), 0.5f, System.Drawing.Color.FromArgb(255, 255, 255), Font.Monospace, Alignment.Center, true, true);
-        Text Text3 = new Text("3", new System.Drawing.PointF(0f, 0f), 0.5f, System.Drawing.Color.FromArgb(255, 255, 255), Font.Monospace, Alignment.Center, true, true);
-        Text Text4 = new Text("4", new System.Drawing.PointF(0f, 0f), 0.5f, System.Drawing.Color.FromArgb(255, 255, 255), Font.Monospace, Alignment.Center, true, true);
-        Text Text5 = new Text("5", new System.Drawing.PointF(0f, 0f), 0.5f, System.Drawing.Color.FromArgb(255, 255, 255), Font.Monospace, Alignment.Center, true, true);
-        Text Text6 = new Text("6", new System.Drawing.PointF(0f, 0f), 0.5f, System.Drawing.Color.FromArgb(255, 255, 255), Font.Monospace, Alignment.Center, true, true);
-        Text Text7 = new Text("7", new System.Drawing.PointF(0f, 0f), 0.5f, System.Drawing.Color.FromArgb(255, 255, 255), Font.Monospace, Alignment.Center, true, true);
-        Text Text8 = new Text("8", new System.Drawing.PointF(0f, 0f), 0.5f, System.Drawing.Color.FromArgb(255, 255, 255), Font.Monospace, Alignment.Center, true, true);
-        Text Text9 = new Text("9", new System.Drawing.PointF(0f, 0f), 0.5f, System.Drawing.Color.FromArgb(255, 255, 255), Font.Monospace, Alignment.Center, true, true);
-        Text entityIdText = new Text("Handle: ", new System.Drawing.PointF(0f, 0f), 0.3f, System.Drawing.Color.FromArgb(255, 255, 255), Font.Monospace, Alignment.Center, true, true);
+        /// <summary>
+        /// Draws entity outlines if enabled (per entity type).
+        /// </summary>
+        /// <returns></returns>
         private async Task ModelDrawDimensions()
         {
-            if (MainMenu.MiscSettingsMenu != null && MainMenu.MiscSettingsMenu.ShowVehicleModelDimensions)
+            if (MainMenu.PermissionsSetupComplete && MainMenu.MiscSettingsMenu != null)
             {
-                var veh = GetVehicle(true);
-                if (veh == null)
+                // Vehicles
+                if (MainMenu.MiscSettingsMenu.ShowVehicleModelDimensions)
                 {
-                    veh = GetVehicle();
+                    foreach (Vehicle v in vehicles)
+                    {
+                        if (stopVehiclesLoop)
+                        {
+                            break;
+                        }
+
+                        DrawEntityBoundingBox(v, 250, 150, 0, 100);
+
+                        if (MainMenu.MiscSettingsMenu.ShowEntityHandles && v.IsOnScreen)
+                        {
+                            SetDrawOrigin(v.Position.X, v.Position.Y, v.Position.Z, 0);
+                            DrawTextOnScreen($"Veh {v.Handle}", 0f, 0f, 0.3f, Alignment.Center, 0);
+                            ClearDrawOrigin();
+                        }
+                        if (MainMenu.MiscSettingsMenu.ShowEntityModels && v.IsOnScreen)
+                        {
+                            SetDrawOrigin(v.Position.X, v.Position.Y, v.Position.Z - 0.3f, 0);
+                            int model = GetEntityModel(v.Handle);
+
+                            string hashes = $"{model} / {(uint)model} / 0x{model.ToString("X8")}";
+
+                            DrawTextOnScreen($"Hash {hashes}", 0f, 0f, 0.3f, Alignment.Center, 0);
+                            ClearDrawOrigin();
+                        }
+                    }
                 }
-                if (veh == null)
+
+                // Props
+                if (MainMenu.MiscSettingsMenu.ShowPropModelDimensions)
                 {
-                    veh = new Vehicle(GetVehiclePedIsUsing(Game.PlayerPed.Handle));
+                    foreach (Prop p in props)
+                    {
+                        if (stopPropsLoop)
+                        {
+                            break;
+                        }
+
+                        DrawEntityBoundingBox(p, 255, 0, 0, 100);
+
+                        if (MainMenu.MiscSettingsMenu.ShowEntityHandles && p.IsOnScreen)
+                        {
+                            SetDrawOrigin(p.Position.X, p.Position.Y, p.Position.Z, 0);
+                            DrawTextOnScreen($"Prop {p.Handle}", 0f, 0f, 0.3f, Alignment.Center, 0);
+                            ClearDrawOrigin();
+                        }
+
+                        if (MainMenu.MiscSettingsMenu.ShowEntityModels && p.IsOnScreen)
+                        {
+                            SetDrawOrigin(p.Position.X, p.Position.Y, p.Position.Z - 0.3f, 0);
+                            int model = GetEntityModel(p.Handle);
+
+                            string hashes = $"{model} / {(uint)model} / 0x{model.ToString("X8")}";
+
+                            DrawTextOnScreen($"Hash {hashes}", 0f, 0f, 0.3f, Alignment.Center, 0);
+                            ClearDrawOrigin();
+                        }
+                    }
                 }
-                if (veh != null && veh.Exists())
+
+                // Peds
+                if (MainMenu.MiscSettingsMenu.ShowPedModelDimensions)
                 {
-                    int ent = veh.Handle;
-                    int model = GetEntityModel(veh.Handle);
-                    Vector3 pos1 = new Vector3(), pos2 = new Vector3();
-                    GetModelDimensions((uint)model, ref pos1, ref pos2);
-                    Vector3 pos3 = new Vector3(pos1.X - (pos1.X - pos2.X), pos1.Y, pos1.Z);
-                    Vector3 pos4 = new Vector3(pos1.X, pos1.Y - (pos1.Y - pos2.Y), pos1.Z);
-                    Vector3 pos5 = new Vector3(pos1.X, pos1.Y, pos1.Z - (pos1.Z - pos2.Z));
-                    Vector3 pos6 = new Vector3(pos2.X - (pos2.X - pos1.X), pos2.Y, pos2.Z);
-                    Vector3 pos7 = new Vector3(pos2.X, pos2.Y - (pos2.Y - pos1.Y), pos2.Z);
-                    Vector3 pos8 = new Vector3(pos2.X, pos2.Y, pos2.Z - (pos2.Z - pos1.Z));
+                    foreach (Ped p in peds)
+                    {
+                        if (stopPedsLoop)
+                        {
+                            break;
+                        }
 
-                    var off1 = GetOffsetFromEntityInWorldCoords(ent, pos1.X, pos1.Y, pos1.Z);
-                    var off2 = GetOffsetFromEntityInWorldCoords(ent, pos5.X, pos5.Y, pos5.Z);
-                    var off3 = GetOffsetFromEntityInWorldCoords(ent, pos7.X, pos7.Y, pos7.Z);
-                    var off4 = GetOffsetFromEntityInWorldCoords(ent, pos3.X, pos3.Y, pos3.Z);
-                    var off5 = GetOffsetFromEntityInWorldCoords(ent, pos4.X, pos4.Y, pos4.Z);
-                    var off6 = GetOffsetFromEntityInWorldCoords(ent, pos6.X, pos6.Y, pos6.Z);
-                    var off7 = GetOffsetFromEntityInWorldCoords(ent, pos2.X, pos2.Y, pos2.Z);
-                    var off8 = GetOffsetFromEntityInWorldCoords(ent, pos8.X, pos8.Y, pos8.Z);
+                        DrawEntityBoundingBox(p, 50, 255, 50, 100);
 
-                    var x = pos4.X - ((pos4.X - pos8.X) / 2f);
-                    var y = pos4.Y - ((pos4.Y - pos8.Y) / 2f);
-                    var z = pos8.Z - ((pos8.Z - pos7.Z) / 2f);
-                    //var pos9 = new Vector3(x, y, z - 0.1f);
-                    //var pos10 = new Vector3(x, y, z + 0.1f);
-                    var pos9 = new Vector3(x, y, z);
-                    var off9 = GetOffsetFromEntityInWorldCoords(ent, pos9.X, pos9.Y, pos9.Z - 0.1f);
-                    var off9bottom = GetOffsetFromEntityInWorldCoords(ent, pos9.X, pos9.Y, pos9.Z - 0.1f);
-                    var off9up = GetOffsetFromEntityInWorldCoords(ent, pos9.X, pos9.Y, pos9.Z + 0.1f);
-                    var off9left = GetOffsetFromEntityInWorldCoords(ent, pos9.X + 0.1f, pos9.Y, pos9.Z);
-                    var off9right = GetOffsetFromEntityInWorldCoords(ent, pos9.X - 0.1f, pos9.Y, pos9.Z);
-                    var possomething = new Vector3(pos7.X - ((pos7.X - pos6.X) / 2f), 0f, pos7.Z - ((pos7.Z - pos2.Z) / 2f));
-                    var centerMiddleTop = GetOffsetFromEntityInWorldCoords(ent, possomething.X, possomething.Y, possomething.Z);
+                        if (MainMenu.MiscSettingsMenu.ShowEntityHandles && p.IsOnScreen)
+                        {
+                            SetDrawOrigin(p.Position.X, p.Position.Y, p.Position.Z, 0);
+                            DrawTextOnScreen($"Ped {p.Handle}", 0f, 0f, 0.3f, Alignment.Center, 0);
+                            ClearDrawOrigin();
+                        }
 
-                    SetDrawOrigin(off1.X, off1.Y, off1.Z, 0); Text1.Draw(); ClearDrawOrigin();
-                    SetDrawOrigin(off2.X, off2.Y, off2.Z + 0.15f, 0); Text2.Draw(); ClearDrawOrigin();
-                    SetDrawOrigin(off3.X, off3.Y, off3.Z + 0.15f, 0); Text3.Draw(); ClearDrawOrigin();
-                    SetDrawOrigin(off4.X, off4.Y, off4.Z, 0); Text4.Draw(); ClearDrawOrigin();
-                    SetDrawOrigin(off5.X, off5.Y, off5.Z, 0); Text5.Draw(); ClearDrawOrigin();
-                    SetDrawOrigin(off6.X, off6.Y, off6.Z + 0.15f, 0); Text6.Draw(); ClearDrawOrigin();
-                    SetDrawOrigin(off7.X, off7.Y, off7.Z + 0.15f, 0); Text7.Draw(); ClearDrawOrigin();
-                    SetDrawOrigin(off8.X, off8.Y, off8.Z, 0); Text8.Draw(); ClearDrawOrigin();
-                    SetDrawOrigin(off9bottom.X, off9bottom.Y, off9bottom.Z, 0); Text9.Draw(); ClearDrawOrigin();
-                    entityIdText.Caption = $"Handle {ent}";
-                    SetDrawOrigin(centerMiddleTop.X, centerMiddleTop.Y, centerMiddleTop.Z, 0); entityIdText.Draw(); ClearDrawOrigin();
+                        if (MainMenu.MiscSettingsMenu.ShowEntityModels && p.IsOnScreen)
+                        {
+                            SetDrawOrigin(p.Position.X, p.Position.Y, p.Position.Z - 0.3f, 0);
+                            int model = GetEntityModel(p.Handle);
 
-                    DrawLine(off1.X, off1.Y, off1.Z, off7.X, off7.Y, off7.Z, 255, 255, 255, 255); // white min to max
+                            string hashes = $"{model} / {(uint)model} / 0x{model.ToString("X8")}";
 
-
-                    DrawLine(off1.X, off1.Y, off1.Z, off4.X, off4.Y, off4.Z, 255, 0, 0, 255); // red   (x)
-                    DrawLine(off1.X, off1.Y, off1.Z, off5.X, off5.Y, off5.Z, 0, 255, 0, 255); // green (y)
-                    DrawLine(off1.X, off1.Y, off1.Z, off2.X, off2.Y, off2.Z, 0, 0, 255, 255); // blue  (z)
-
-                    DrawLine(off8.X, off8.Y, off8.Z, off5.X, off5.Y, off5.Z, 255, 0, 0, 255); // red   (x)
-                    DrawLine(off8.X, off8.Y, off8.Z, off4.X, off4.Y, off4.Z, 0, 255, 0, 255); // green (y)
-                    DrawLine(off8.X, off8.Y, off8.Z, off7.X, off7.Y, off7.Z, 0, 0, 255, 255); // blue  (z)
-
-                    DrawLine(off2.X, off2.Y, off2.Z, off3.X, off3.Y, off3.Z, 255, 0, 0, 255); // red   (x)
-                    DrawLine(off2.X, off2.Y, off2.Z, off6.X, off6.Y, off6.Z, 0, 255, 0, 255); // green (y)
-                    DrawLine(off3.X, off3.Y, off3.Z, off4.X, off4.Y, off4.Z, 0, 0, 255, 255); // blue  (z)
-
-                    DrawLine(off6.X, off6.Y, off6.Z, off7.X, off7.Y, off7.Z, 255, 0, 0, 255); // red   (x)
-                    DrawLine(off3.X, off3.Y, off3.Z, off7.X, off7.Y, off7.Z, 0, 255, 0, 255); // green (y)
-                    DrawLine(off6.X, off6.Y, off6.Z, off5.X, off5.Y, off5.Z, 0, 0, 255, 255); // blue  (z)
-
-                    DrawLine(off9bottom.X, off9bottom.Y, off9bottom.Z, off9up.X, off9up.Y, off9up.Z, 255, 0, 255, 255); // pink (center front up/down)
-                    DrawLine(off9left.X, off9left.Y, off9left.Z, off9right.X, off9right.Y, off9right.Z, 255, 255, 0, 255); // yellow (center front x)
+                            DrawTextOnScreen($"Hash {hashes}", 0f, 0f, 0.3f, Alignment.Center, 0);
+                            ClearDrawOrigin();
+                        }
+                    }
                 }
             }
             else
             {
-                await Delay(0);
+                await Task.FromResult(0);
             }
         }
         #endregion
 
-
-        #region animation functions
+        #region animal ped camera change blocker
         /// <summary>
-        /// This triggers a helmet visor/goggles toggle if available.
+        /// Prevents players from going into first person when they're currently using an animal as their player ped.
+        /// This is to prevent them crashing their game or falling out of the sky as ~~birds~~ bricks.
         /// </summary>
         /// <returns></returns>
-        async Task SwitchHelmet()
+        private async Task AnimalPedCameraChangeBlocker()
         {
-            int component = GetPedPropIndex(Game.PlayerPed.Handle, 0);      // helmet index
-            await Delay(1);
-            int texture = GetPedPropTextureIndex(Game.PlayerPed.Handle, 0); // texture
-            await Delay(1);
-            int compHash = GetHashNameForProp(Game.PlayerPed.Handle, 0, component, texture); // prop combination hash
-            await Delay(1);
-            if (N_0xd40aac51e8e4c663((uint)compHash) > 0) // helmet has visor.
+            uint model = (uint)GetEntityModel(Game.PlayerPed.Handle);
+            if (AnimalHashes.Contains(model))
             {
-                int newHelmet = 0;
-                string animName = "visor_up";
-                string animDict = "anim@mp_helmets@on_foot";
-                if ((uint)Game.PlayerPed.Model.Hash == (uint)PedHash.FreemodeFemale01)
+                while (model == (uint)GetEntityModel(Game.PlayerPed.Handle))
                 {
-                    switch (component)
-                    {
-                        case 49:
-                            newHelmet = 67;
-                            animName = "visor_up";
-                            break;
-                        case 50:
-                            newHelmet = 68;
-                            animName = "visor_up";
-                            break;
-                        case 51:
-                            newHelmet = 69;
-                            animName = "visor_up";
-                            break;
-                        case 52:
-                            newHelmet = 70;
-                            animName = "visor_up";
-                            break;
-                        case 62:
-                            newHelmet = 71;
-                            animName = "visor_up";
-                            break;
-                        case 66:
-                            newHelmet = 81;
-                            animName = "visor_down";
-                            break;
-                        case 67:
-                            newHelmet = 49;
-                            animName = "visor_down";
-                            break;
-                        case 68:
-                            newHelmet = 50;
-                            animName = "visor_down";
-                            break;
-                        case 69:
-                            newHelmet = 51;
-                            animName = "visor_down";
-                            break;
-                        case 70:
-                            newHelmet = 52;
-                            animName = "visor_down";
-                            break;
-                        case 71:
-                            newHelmet = 62;
-                            animName = "visor_down";
-                            break;
-                        case 72:
-                            newHelmet = 73;
-                            animName = "visor_up";
-                            break;
-                        case 73:
-                            newHelmet = 72;
-                            animName = "visor_down";
-                            break;
-                        case 77:
-                            newHelmet = 78;
-                            animName = "visor_up";
-                            break;
-                        case 78:
-                            newHelmet = 77;
-                            animName = "visor_down";
-                            break;
-                        case 79:
-                            newHelmet = 80;
-                            animName = "visor_up";
-                            break;
-                        case 80:
-                            newHelmet = 79;
-                            animName = "visor_down";
-                            break;
-                        case 81:
-                            newHelmet = 66;
-                            animName = "visor_up";
-                            break;
-                        case 90:
-                            newHelmet = 91;
-                            animName = "visor_up";
-                            break;
-                        case 91:
-                            newHelmet = 90;
-                            animName = "visor_down";
-                            break;
-                        case 115:
-                            newHelmet = 116;
-                            animName = "goggles_up";
-                            break;
-                        case 116:
-                            newHelmet = 115;
-                            animName = "goggles_down";
-                            break;
-                        case 117:
-                            newHelmet = 118;
-                            animName = "goggles_up";
-                            break;
-                        case 118:
-                            newHelmet = 117;
-                            animName = "goggles_down";
-                            break;
-                        case 122:
-                            newHelmet = 123;
-                            animName = "visor_up";
-                            break;
-                        case 123:
-                            newHelmet = 122;
-                            animName = "visor_down";
-                            break;
-                        case 124:
-                            newHelmet = 125;
-                            animName = "visor_up";
-                            break;
-                        case 125:
-                            newHelmet = 124;
-                            animName = "visor_down";
-                            break;
-                    }
+                    DisableFirstPersonCamThisFrame();
+                    await Delay(0);
                 }
-                else if ((uint)Game.PlayerPed.Model.Hash == (uint)PedHash.FreemodeMale01)
+            }
+        }
+        #endregion
+
+        #region Slow misc tick
+
+        internal static float entityRange = 2000f;
+        /// <summary>
+        /// Slow functions for the model dimensions outline entities lists.
+        /// </summary>
+        /// <returns></returns>
+        private async Task SlowMiscTick()
+        {
+            const int delay = 50;
+            //const int limit = 200;
+            if (MainMenu.PermissionsSetupComplete && MainMenu.MiscSettingsMenu != null)
+            {
+                var pp = Game.PlayerPed.Position;
+                if (MainMenu.MiscSettingsMenu.ShowPropModelDimensions)
                 {
-                    switch (component)
+                    stopPropsLoop = true;
+                    props = World.GetAllProps().Where(e => e.IsOnScreen && e.Position.DistanceToSquared(pp) < entityRange).ToList();
+                    stopPropsLoop = false;
+
+                    await Delay(delay);
+                }
+
+                if (MainMenu.MiscSettingsMenu.ShowPedModelDimensions)
+                {
+                    stopPedsLoop = true;
+                    peds = World.GetAllPeds().Where(e => e.IsOnScreen && e.Position.DistanceToSquared(pp) < entityRange).ToList();
+                    stopPedsLoop = false;
+
+                    await Delay(delay);
+                }
+
+                if (MainMenu.MiscSettingsMenu.ShowVehicleModelDimensions)
+                {
+                    stopVehiclesLoop = true;
+                    vehicles = World.GetAllVehicles().Where(e => e.IsOnScreen && e.Position.DistanceToSquared(pp) < entityRange).ToList();
+                    stopVehiclesLoop = false;
+
+                    await Delay(delay);
+                }
+
+            }
+        }
+        #endregion
+
+        #region Personal Vehicle options
+        private bool messageCooldown = false;
+        private async void StartMessageCooldown()
+        {
+            messageCooldown = true;
+            await Delay(10 * 60000); // wait at least 10 minutes before checking if this should be showed again, to prevent repeatedly spamming the user.
+            messageCooldown = false;
+        }
+        int time = 0;
+
+        /// <summary>
+        /// Manages personal vehicle options like locking doors while close.
+        /// </summary>
+        /// <returns></returns>
+        private async Task PersonalVehicleOptions()
+        {
+            if (MainMenu.PermissionsSetupComplete && MainMenu.PersonalVehicleMenu != null && IsAllowed(Permission.PVLockDoors) && MainMenu.PersonalVehicleMenu.CurrentPersonalVehicle != null)
+            {
+                if (!Game.PlayerPed.IsInVehicle(MainMenu.PersonalVehicleMenu.CurrentPersonalVehicle))
+                {
+                    if (Game.PlayerPed.Position.DistanceToSquared(MainMenu.PersonalVehicleMenu.CurrentPersonalVehicle.Position) < 30.0f)
                     {
-                        case 50:
-                            newHelmet = 68;
-                            animName = "visor_up";
-                            break;
-                        case 51:
-                            newHelmet = 69;
-                            animName = "visor_up";
-                            break;
-                        case 52:
-                            newHelmet = 70;
-                            animName = "visor_up";
-                            break;
-                        case 53:
-                            newHelmet = 71;
-                            animName = "visor_up";
-                            break;
-                        case 62:
-                            newHelmet = 72;
-                            animName = "visor_up";
-                            break;
-                        case 67:
-                            newHelmet = 82;
-                            animName = "visor_down";
-                            break;
-                        case 68:
-                            newHelmet = 50;
-                            animName = "visor_down";
-                            break;
-                        case 69:
-                            newHelmet = 51;
-                            animName = "visor_down";
-                            break;
-                        case 70:
-                            newHelmet = 52;
-                            animName = "visor_down";
-                            break;
-                        case 71:
-                            newHelmet = 53;
-                            animName = "visor_down";
-                            break;
-                        case 72:
-                            newHelmet = 62;
-                            animName = "visor_down";
-                            break;
-                        case 73:
-                            newHelmet = 74;
-                            animName = "visor_up";
-                            break;
-                        case 74:
-                            newHelmet = 73;
-                            animName = "visor_down";
-                            break;
-                        case 78:
-                            newHelmet = 79;
-                            animName = "visor_up";
-                            break;
-                        case 79:
-                            newHelmet = 78;
-                            animName = "visor_down";
-                            break;
-                        case 80:
-                            newHelmet = 81;
-                            animName = "visor_up";
-                            break;
-                        case 81:
-                            newHelmet = 80;
-                            animName = "visor_down";
-                            break;
-                        case 82:
-                            newHelmet = 67;
-                            animName = "visor_up";
-                            break;
-                        case 91:
-                            newHelmet = 92;
-                            animName = "visor_up";
-                            break;
-                        case 92:
-                            newHelmet = 91;
-                            animName = "visor_down";
-                            break;
-                        case 116:
-                            newHelmet = 117;
-                            animName = "goggles_up";
-                            break;
-                        case 117:
-                            newHelmet = 116;
-                            animName = "goggles_down";
-                            break;
-                        case 118:
-                            newHelmet = 119;
-                            animName = "goggles_up";
-                            break;
-                        case 119:
-                            newHelmet = 118;
-                            animName = "goggles_down";
-                            break;
-                        case 123:
-                            newHelmet = 124;
-                            animName = "visor_up";
-                            break;
-                        case 124:
-                            newHelmet = 123;
-                            animName = "visor_down";
-                            break;
-                        case 125:
-                            newHelmet = 126;
-                            animName = "visor_up";
-                            break;
-                        case 126:
-                            newHelmet = 125;
-                            animName = "visor_down";
-                            break;
+                        if (Game.IsControlJustReleased(0, Control.VehicleHorn))
+                        {
+                            // check if it was recently pressed (within the last 500 ms).
+                            if (GetGameTimer() - time < 500)
+                            {
+                                // lock or unlock the vehicle
+                                PressKeyFob(MainMenu.PersonalVehicleMenu.CurrentPersonalVehicle);
+                                await Delay(100);
+                                bool lockDoors = !GetVehicleDoorsLockedForPlayer(MainMenu.PersonalVehicleMenu.CurrentPersonalVehicle.Handle, Game.PlayerPed.Handle);
+                                LockOrUnlockDoors(MainMenu.PersonalVehicleMenu.CurrentPersonalVehicle, lockDoors);
+
+                                // reset the timer.
+                                time = 0;
+                            }
+                            // otherwise count this as the first one.
+                            else
+                            {
+                                time = GetGameTimer();
+                            }
+                        }
+                        if (!messageCooldown)
+                        {
+                            HelpMessage.Custom("When you are close to your personal vehicle, you can double tap ~INPUT_VEH_HORN~ to lock or unlock it.", 10000, true);
+                            StartMessageCooldown();
+                        }
+                    }
+                    else
+                    {
+                        await Delay(100);
                     }
                 }
                 else
                 {
-                    return;
+                    await Delay(100);
                 }
-                if (GetFollowPedCamViewMode() == 4)
-                {
-                    if (animName.Contains("goggles"))
-                    {
-                        animName = animName.Replace("goggles", "visor");
-                    }
-                    animName = "pov_" + animName;
-                }
-                if (Game.PlayerPed.IsInVehicle())
-                {
-                    if (animName.Contains("goggles"))
-                    {
-                        ClearAllHelpMessages();
-                        BeginTextCommandDisplayHelp("string");
-                        AddTextComponentSubstringPlayerName("You can not toggle your goggles while in a vehicle.");
-                        EndTextCommandDisplayHelp(0, false, true, 6000);
-                        return;
-                    }
-                    Vehicle veh = GetVehicle();
-                    if (veh != null && veh.Exists() && !veh.IsDead && (veh.Model.IsBicycle || veh.Model.IsBike || veh.Model.IsQuadbike))
-                    {
-                        if (veh.Model.IsQuadbike)
-                        {
-                            animDict = "anim@mp_helmets@on_bike@quad";
-                        }
-                        else if (veh.Model.IsBike)
-                        {
-                            List<uint> sportBikes = new List<uint>()
-                            {
-                                (uint)GetHashKey("AKUMA"),
-                                (uint)GetHashKey("BATI"),
-                                (uint)GetHashKey("BATI2"),
-                                (uint)GetHashKey("CARBONRS"),
-                                (uint)GetHashKey("DEFILER"),
-                                (uint)GetHashKey("DIABLOUS2"),
-                                (uint)GetHashKey("DOUBLE"),
-                                (uint)GetHashKey("FCR"),
-                                (uint)GetHashKey("FCR2"),
-                                (uint)GetHashKey("HAKUCHOU"),
-                                (uint)GetHashKey("HAKUCHOU2"),
-                                (uint)GetHashKey("LECTRO"),
-                                (uint)GetHashKey("NEMESIS"),
-                                (uint)GetHashKey("OPPRESSOR"),
-                                (uint)GetHashKey("OPPRESSOR2"),
-                                (uint)GetHashKey("PCJ"),
-                                (uint)GetHashKey("RUFFIAN"),
-                                (uint)GetHashKey("SHOTARO"),
-                                (uint)GetHashKey("VADER"),
-                                (uint)GetHashKey("VORTEX"),
-                            };
-                            List<uint> chopperBikes = new List<uint>()
-                            {
-                                (uint)GetHashKey("SANCTUS"),
-                                (uint)GetHashKey("ZOMBIEA"),
-                                (uint)GetHashKey("ZOMBIEB"),
-                            };
-                            List<uint> dirtBikes = new List<uint>()
-                            {
-                                (uint)GetHashKey("BF400"),
-                                (uint)GetHashKey("ENDURO"),
-                                (uint)GetHashKey("MANCHEZ"),
-                                (uint)GetHashKey("SANCHEZ"),
-                                (uint)GetHashKey("SANCHEZ2"),
-                                (uint)GetHashKey("ESSKEY"),
-                            };
-                            List<uint> scooters = new List<uint>()
-                            {
-                                (uint)GetHashKey("FAGGIO"),
-                                (uint)GetHashKey("FAGGIO2"),
-                                (uint)GetHashKey("FAGGIO3"),
-                                (uint)GetHashKey("CLIFFHANGER"),
-                                (uint)GetHashKey("BAGGER"),
-                            };
-                            List<uint> policeb = new List<uint>()
-                            {
-                                (uint)GetHashKey("AVARUS"),
-                                (uint)GetHashKey("CHIMERA"),
-                                (uint)GetHashKey("POLICEB"),
-                                (uint)GetHashKey("SOVEREIGN"),
-                                (uint)GetHashKey("HEXER"),
-                                (uint)GetHashKey("INNOVATION"),
-                                (uint)GetHashKey("NIGHTBLADE"),
-                                (uint)GetHashKey("RATBIKE"),
-                                (uint)GetHashKey("DAEMON"),
-                                (uint)GetHashKey("DAEMON2"),
-                                (uint)GetHashKey("DIABLOUS"),
-                                (uint)GetHashKey("GARGOYLE"),
-                                (uint)GetHashKey("THRUST"),
-                                (uint)GetHashKey("VINDICATOR"),
-                                (uint)GetHashKey("WOLFSBANE"),
-                            };
+            }
+            else
+            {
+                await Delay(100);
+            }
+            await Task.FromResult(0);
+        }
+        #endregion
 
-                            if (policeb.Contains((uint)veh.Model.Hash))
+        #region animation functions
+        /// <summary>
+        /// This triggers a helmet visor/goggles toggle if available.
+        /// THIS IS NOT A TICK FUNCTION
+        /// </summary>
+        /// <returns></returns>
+        private async Task SwitchHelmetOnce()
+        {
+            if (MainMenu.PermissionsSetupComplete)
+            {
+                int component = GetPedPropIndex(Game.PlayerPed.Handle, 0);      // helmet index
+                int texture = GetPedPropTextureIndex(Game.PlayerPed.Handle, 0); // texture
+                int compHash = GetHashNameForProp(Game.PlayerPed.Handle, 0, component, texture); // prop combination hash
+                if (N_0xd40aac51e8e4c663((uint)compHash) > 0) // helmet has visor.
+                {
+                    int newHelmet = component;
+                    int newHelmetTexture = texture;
+
+                    AltPropVariationData[] newHelmetData = Game.GetAltPropVariationData(Game.PlayerPed.Handle, 0);
+
+                    Log(JsonConvert.SerializeObject(newHelmetData, Formatting.Indented));
+
+                    if (newHelmetData != null && newHelmetData.Length > 0)
+                    {
+                        newHelmet = newHelmetData[0].altPropVariationIndex;
+                        newHelmetTexture = newHelmetData[0].altPropVariationTexture;
+                    }
+
+                    string animName = component < newHelmet ? "visor_up" : "visor_down";
+                    if (Game.PlayerPed.Model == PedHash.FreemodeFemale01)
+                    {
+                        if (component == 66 || component == 81)
+                        {
+                            animName = component > newHelmet ? "visor_up" : "visor_down";
+                        }
+                        if (component >= 115 && component <= 118)
+                        {
+                            animName = component < newHelmet ? "goggles_up" : "goggles_down";
+                        }
+                    }
+                    else
+                    {
+                        if (component == 67 || component == 82)
+                        {
+                            animName = component > newHelmet ? "visor_up" : "visor_down";
+                        }
+                        if (component >= 116 && component <= 119)
+                        {
+                            animName = component < newHelmet ? "goggles_up" : "goggles_down";
+                        }
+                    }
+
+                    string animDict = "anim@mp_helmets@on_foot";
+
+                    if (GetFollowPedCamViewMode() == 4)
+                    {
+                        if (animName.Contains("goggles"))
+                        {
+                            animName = animName.Replace("goggles", "visor");
+                        }
+                        animName = "pov_" + animName;
+                    }
+                    if (Game.PlayerPed.IsInVehicle())
+                    {
+                        if (animName.Contains("goggles"))
+                        {
+                            ClearAllHelpMessages();
+                            BeginTextCommandDisplayHelp("string");
+                            AddTextComponentSubstringPlayerName("You can not toggle your goggles while in a vehicle.");
+                            EndTextCommandDisplayHelp(0, false, true, 6000);
+                            return;
+                        }
+                        Vehicle veh = GetVehicle();
+                        if (veh != null && veh.Exists() && !veh.IsDead && (veh.Model.IsBicycle || veh.Model.IsBike || veh.Model.IsQuadbike))
+                        {
+                            if (veh.Model.IsQuadbike)
                             {
-                                animDict = "anim@mp_helmets@on_bike@policeb";
+                                animDict = "anim@mp_helmets@on_bike@quad";
                             }
-                            else if (sportBikes.Contains((uint)veh.Model.Hash))
+                            else if (veh.Model.IsBike)
                             {
-                                animDict = "anim@mp_helmets@on_bike@sports";
+                                List<uint> sportBikes = new List<uint>()
+                                {
+                                    (uint)GetHashKey("AKUMA"),
+                                    (uint)GetHashKey("BATI"),
+                                    (uint)GetHashKey("BATI2"),
+                                    (uint)GetHashKey("CARBONRS"),
+                                    (uint)GetHashKey("DEFILER"),
+                                    (uint)GetHashKey("DIABLOUS2"),
+                                    (uint)GetHashKey("DOUBLE"),
+                                    (uint)GetHashKey("FCR"),
+                                    (uint)GetHashKey("FCR2"),
+                                    (uint)GetHashKey("HAKUCHOU"),
+                                    (uint)GetHashKey("HAKUCHOU2"),
+                                    (uint)GetHashKey("LECTRO"),
+                                    (uint)GetHashKey("NEMESIS"),
+                                    (uint)GetHashKey("OPPRESSOR"),
+                                    (uint)GetHashKey("OPPRESSOR2"),
+                                    (uint)GetHashKey("PCJ"),
+                                    (uint)GetHashKey("RUFFIAN"),
+                                    (uint)GetHashKey("SHOTARO"),
+                                    (uint)GetHashKey("VADER"),
+                                    (uint)GetHashKey("VORTEX"),
+                                };
+                                List<uint> chopperBikes = new List<uint>()
+                                {
+                                    (uint)GetHashKey("SANCTUS"),
+                                    (uint)GetHashKey("ZOMBIEA"),
+                                    (uint)GetHashKey("ZOMBIEB"),
+                                };
+                                List<uint> dirtBikes = new List<uint>()
+                                {
+                                    (uint)GetHashKey("BF400"),
+                                    (uint)GetHashKey("ENDURO"),
+                                    (uint)GetHashKey("MANCHEZ"),
+                                    (uint)GetHashKey("SANCHEZ"),
+                                    (uint)GetHashKey("SANCHEZ2"),
+                                    (uint)GetHashKey("ESSKEY"),
+                                };
+                                List<uint> scooters = new List<uint>()
+                                {
+                                    (uint)GetHashKey("FAGGIO"),
+                                    (uint)GetHashKey("FAGGIO2"),
+                                    (uint)GetHashKey("FAGGIO3"),
+                                    (uint)GetHashKey("CLIFFHANGER"),
+                                    (uint)GetHashKey("BAGGER"),
+                                };
+                                List<uint> policeb = new List<uint>()
+                                {
+                                    (uint)GetHashKey("AVARUS"),
+                                    (uint)GetHashKey("CHIMERA"),
+                                    (uint)GetHashKey("POLICEB"),
+                                    (uint)GetHashKey("SOVEREIGN"),
+                                    (uint)GetHashKey("HEXER"),
+                                    (uint)GetHashKey("INNOVATION"),
+                                    (uint)GetHashKey("NIGHTBLADE"),
+                                    (uint)GetHashKey("RATBIKE"),
+                                    (uint)GetHashKey("DAEMON"),
+                                    (uint)GetHashKey("DAEMON2"),
+                                    (uint)GetHashKey("DIABLOUS"),
+                                    (uint)GetHashKey("GARGOYLE"),
+                                    (uint)GetHashKey("THRUST"),
+                                    (uint)GetHashKey("VINDICATOR"),
+                                    (uint)GetHashKey("WOLFSBANE"),
+                                };
+
+                                if (policeb.Contains((uint)veh.Model.Hash))
+                                {
+                                    animDict = "anim@mp_helmets@on_bike@policeb";
+                                }
+                                else if (sportBikes.Contains((uint)veh.Model.Hash))
+                                {
+                                    animDict = "anim@mp_helmets@on_bike@sports";
+                                }
+                                else if (chopperBikes.Contains((uint)veh.Model.Hash))
+                                {
+                                    animDict = "anim@mp_helmets@on_bike@chopper";
+                                }
+                                else if (dirtBikes.Contains((uint)veh.Model.Hash))
+                                {
+                                    animDict = "anim@mp_helmets@on_bike@dirt";
+                                }
+                                else if (scooters.Contains((uint)veh.Model.Hash))
+                                {
+                                    animDict = "anim@mp_helmets@on_bike@scooter";
+                                }
+                                else
+                                {
+                                    animDict = "anim@mp_helmets@on_bike@sports";
+                                }
                             }
-                            else if (chopperBikes.Contains((uint)veh.Model.Hash))
-                            {
-                                animDict = "anim@mp_helmets@on_bike@chopper";
-                            }
-                            else if (dirtBikes.Contains((uint)veh.Model.Hash))
-                            {
-                                animDict = "anim@mp_helmets@on_bike@dirt";
-                            }
-                            else if (scooters.Contains((uint)veh.Model.Hash))
+                            else if (veh.Model.IsBicycle)
                             {
                                 animDict = "anim@mp_helmets@on_bike@scooter";
                             }
-                            else
-                            {
-                                animDict = "anim@mp_helmets@on_bike@sports";
-                            }
-                        }
-                        else if (veh.Model.IsBicycle)
-                        {
-                            animDict = "anim@mp_helmets@on_bike@scooter";
                         }
                     }
-                }
-                if (!HasAnimDictLoaded(animDict))
-                {
-                    RequestAnimDict(animDict);
-                    while (!HasAnimDictLoaded(animDict))
+                    if (!HasAnimDictLoaded(animDict))
                     {
+                        RequestAnimDict(animDict);
+                        while (!HasAnimDictLoaded(animDict))
+                        {
+                            await Delay(0);
+                        }
+                    }
+                    if (animName.StartsWith("pov_") && animDict != "anim@mp_helmets@on_foot")
+                    {
+                        animName = animName.Substring(4);
+                    }
+                    ClearPedTasks(Game.PlayerPed.Handle);
+                    TaskPlayAnim(Game.PlayerPed.Handle, animDict, animName, 8.0f, 1.0f, -1, 48, 0.0f, false, false, false);
+                    int timeoutTimer = GetGameTimer();
+                    while (GetEntityAnimCurrentTime(Game.PlayerPed.Handle, animDict, animName) <= 0.0f)
+                    {
+                        if (GetGameTimer() - timeoutTimer > 1000)
+                        {
+                            ClearPedTasks(Game.PlayerPed.Handle);
+                            Debug.WriteLine("[vMenu] [WARNING] Waiting for animation to start took too long. Preventing hanging of function. Dbg: fault in location 1.");
+                            return;
+                        }
                         await Delay(0);
                     }
-                }
-                ClearPedTasks(Game.PlayerPed.Handle);
-                TaskPlayAnim(Game.PlayerPed.Handle, animDict, animName, 8.0f, 1.0f, -1, 48, 0.0f, false, false, false);
-                int timeoutTimer = GetGameTimer();
-                while (GetEntityAnimCurrentTime(Game.PlayerPed.Handle, animDict, animName) <= 0.0f)
-                {
-                    if (GetGameTimer() - timeoutTimer > 2000)
+                    timeoutTimer = GetGameTimer();
+                    while (GetEntityAnimCurrentTime(Game.PlayerPed.Handle, animDict, animName) > 0.0f)
                     {
-                        ClearPedTasks(Game.PlayerPed.Handle);
-                        Debug.WriteLine("[vMenu] [WARNING] Waiting for animation to start took too long. Preventing hanging of function.");
-                        return;
+                        await Delay(0);
+
+                        if (GetGameTimer() - timeoutTimer > 3000)
+                        {
+                            ClearPedTasks(Game.PlayerPed.Handle);
+                            Debug.WriteLine("[vMenu] [WARNING] Waiting for animation duration took too long. Preventing hanging of function. Dbg: fault in location 2.");
+                            return;
+                        }
+                        if (GetEntityAnimCurrentTime(Game.PlayerPed.Handle, animDict, animName) > 0.39f)
+                        {
+                            SetPedPropIndex(Game.PlayerPed.Handle, 0, newHelmet, newHelmetTexture, true);
+                        }
                     }
-                    await Delay(0);
+                    ClearPedTasks(Game.PlayerPed.Handle);
+                    RemoveAnimDict(animDict);
                 }
-                timeoutTimer = GetGameTimer();
-                while (GetEntityAnimCurrentTime(Game.PlayerPed.Handle, animDict, animName) > 0.0f)
-                {
-                    await Delay(0);
-                    if (GetGameTimer() - timeoutTimer > 3000)
-                    {
-                        ClearPedTasks(Game.PlayerPed.Handle);
-                        Debug.WriteLine("[vMenu] [WARNING] Waiting for animation duration took too long. Preventing hanging of function.");
-                        return;
-                    }
-                    if (GetEntityAnimCurrentTime(Game.PlayerPed.Handle, animDict, animName) > 0.39f)
-                    {
-                        SetPedPropIndex(Game.PlayerPed.Handle, 0, newHelmet, texture, true);
-                    }
-                }
-                ClearPedTasks(Game.PlayerPed.Handle);
-                RemoveAnimDict(animDict);
             }
         }
 
         /// <summary>
         /// Pickup a snowball.
+        /// THIS IS NOT A TICK FUNCTION
         /// </summary>
         /// <returns></returns>
-        async Task PickupSnowball()
+        private async Task PickupSnowballOnce()
         {
-            ClearPedTasks(Game.PlayerPed.Handle);
-            if (IsAllowed(Permission.WPSnowball)) // only if the player is allowed to spawn in snowballs.
+            if (MainMenu.PermissionsSetupComplete)
             {
-                int maxAmmo = 10;
-                GetMaxAmmo(Game.PlayerPed.Handle, snowball_hash, ref maxAmmo);
-                if (GetAmmoInPedWeapon(Game.PlayerPed.Handle, snowball_hash) < maxAmmo)
+                ClearPedTasks(Game.PlayerPed.Handle);
+                if (IsAllowed(Permission.WPSnowball)) // only if the player is allowed to spawn in snowballs.
                 {
-                    SetPedCurrentWeaponVisible(Game.PlayerPed.Handle, false, true, false, false);
-                    if (!HasAnimDictLoaded(snowball_anim_dict))
+                    int maxAmmo = 10;
+                    GetMaxAmmo(Game.PlayerPed.Handle, snowball_hash, ref maxAmmo);
+                    if (GetAmmoInPedWeapon(Game.PlayerPed.Handle, snowball_hash) < maxAmmo)
                     {
-                        RequestAnimDict(snowball_anim_dict);
-                        while (!HasAnimDictLoaded(snowball_anim_dict))
+                        SetPedCurrentWeaponVisible(Game.PlayerPed.Handle, false, true, false, false);
+                        if (!HasAnimDictLoaded(snowball_anim_dict))
+                        {
+                            RequestAnimDict(snowball_anim_dict);
+                            while (!HasAnimDictLoaded(snowball_anim_dict))
+                            {
+                                await Delay(0);
+                            }
+                        }
+                        TaskPlayAnim(Game.PlayerPed.Handle, snowball_anim_dict, snowball_anim_name, 8f, 1f, -1, 0, 0f, false, false, false);
+                        bool fired = false;
+
+                        var dur = GetAnimDuration(snowball_anim_dict, snowball_anim_name);
+                        int timer = GetGameTimer();
+                        while (GetEntityAnimCurrentTime(Game.PlayerPed.Handle, snowball_anim_dict, snowball_anim_name) < 0.97f)
                         {
                             await Delay(0);
-                        }
-                    }
-                    TaskPlayAnim(Game.PlayerPed.Handle, snowball_anim_dict, snowball_anim_name, 8f, 1f, -1, 0, 0f, false, false, false);
-                    bool fired = false;
-
-                    var dur = GetAnimDuration(snowball_anim_dict, snowball_anim_name);
-                    int timer = GetGameTimer();
-                    while (GetEntityAnimCurrentTime(Game.PlayerPed.Handle, snowball_anim_dict, snowball_anim_name) < 0.97f)
-                    {
-                        await Delay(0);
-                        if (!fired)
-                        {
-                            if (HasAnimEventFired(Game.PlayerPed.Handle, (uint)GetHashKey("CreateObject")))
+                            if (!fired)
                             {
-                                AddAmmoToPed(Game.PlayerPed.Handle, snowball_hash, 2);
-                                GiveWeaponToPed(Game.PlayerPed.Handle, snowball_hash, 0, true, true);
-                                if (GetAmmoInPedWeapon(Game.PlayerPed.Handle, snowball_hash) > maxAmmo)
+                                if (HasAnimEventFired(Game.PlayerPed.Handle, (uint)GetHashKey("CreateObject")))
                                 {
-                                    SetPedAmmo(Game.PlayerPed.Handle, snowball_hash, maxAmmo);
+                                    AddAmmoToPed(Game.PlayerPed.Handle, snowball_hash, 2);
+                                    GiveWeaponToPed(Game.PlayerPed.Handle, snowball_hash, 0, true, true);
+                                    if (GetAmmoInPedWeapon(Game.PlayerPed.Handle, snowball_hash) > maxAmmo)
+                                    {
+                                        SetPedAmmo(Game.PlayerPed.Handle, snowball_hash, maxAmmo);
+                                    }
+                                    fired = true;
                                 }
-                                fired = true;
+                                else if (HasAnimEventFired(Game.PlayerPed.Handle, (uint)GetHashKey("Interrupt")))
+                                {
+                                    break;
+                                }
                             }
                             else if (HasAnimEventFired(Game.PlayerPed.Handle, (uint)GetHashKey("Interrupt")))
                             {
                                 break;
                             }
-                        }
-                        else if (HasAnimEventFired(Game.PlayerPed.Handle, (uint)GetHashKey("Interrupt")))
-                        {
-                            break;
-                        }
-                        // fail safe just in case
-                        if (GetGameTimer() - timer > (dur * 1000f))
-                        {
-                            break;
+                            // fail safe just in case
+                            if (GetGameTimer() - timer > (dur * 1000f))
+                            {
+                                break;
+                            }
                         }
                     }
-
-                }
-                else
-                {
-                    ClearAllHelpMessages();
-                    BeginTextCommandDisplayHelp("string");
-                    AddTextComponentSubstringPlayerName($"You can not carry more than {maxAmmo} snowballs!");
-                    EndTextCommandDisplayHelp(0, false, true, 6000);
+                    else
+                    {
+                        ClearAllHelpMessages();
+                        BeginTextCommandDisplayHelp("string");
+                        AddTextComponentSubstringPlayerName($"You can not carry more than {maxAmmo} snowballs!");
+                        EndTextCommandDisplayHelp(0, false, true, 6000);
+                    }
                 }
             }
         }

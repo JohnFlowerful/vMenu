@@ -20,17 +20,21 @@ namespace vMenuClient
         //public static MenuPool Mp { get; } = new MenuPool();
 
         private bool firstTick = true;
-        public static bool PermissionsSetupComplete = false;
+        public static bool PermissionsSetupComplete => ArePermissionsSetup;
         public static bool ConfigOptionsSetupComplete = false;
 
         public static Control MenuToggleKey { get { return MenuController.MenuToggleKey; } private set { MenuController.MenuToggleKey = value; } } // M by default (InteractionMenu)
         public static int NoClipKey { get; private set; } = 289; // F2 by default (ReplayStartStopRecordingSecondary)
         public static Menu Menu { get; private set; }
+        public static Menu PlayerSubmenu { get; private set; }
+        public static Menu VehicleSubmenu { get; private set; }
+        public static Menu WorldSubmenu { get; private set; }
 
         public static PlayerOptions PlayerOptionsMenu { get; private set; }
         public static OnlinePlayers OnlinePlayersMenu { get; private set; }
         public static BannedPlayers BannedPlayersMenu { get; private set; }
         public static SavedVehicles SavedVehiclesMenu { get; private set; }
+        public static PersonalVehicle PersonalVehicleMenu { get; private set; }
         public static VehicleOptions VehicleOptionsMenu { get; private set; }
         public static VehicleSpawner VehicleSpawnerMenu { get; private set; }
         public static PlayerAppearance PlayerAppearanceMenu { get; private set; }
@@ -43,8 +47,7 @@ namespace vMenuClient
         public static MiscSettings MiscSettingsMenu { get; private set; }
         public static VoiceChat VoiceChatSettingsMenu { get; private set; }
         public static About AboutMenu { get; private set; }
-        public static Menu NoClipMenu { get; } = new NoclipMenu().GetMenu();
-        public static bool NoClipEnabled { get; set; } = false;
+        public static bool NoClipEnabled { get { return NoClip.IsNoclipActive(); } set { NoClip.SetNoclipActive(value); } }
         public static PlayerList PlayersList;
 
         // Only used when debugging is enabled:
@@ -57,7 +60,7 @@ namespace vMenuClient
         public static bool DontOpenMenus { get { return MenuController.DontOpenAnyMenu; } set { MenuController.DontOpenAnyMenu = value; } }
         public static bool DisableControls { get { return MenuController.DisableMenuButtons; } set { MenuController.DisableMenuButtons = value; } }
 
-        private const int currentCleanupVersion = 1;
+        private const int currentCleanupVersion = 2;
         #endregion
 
         /// <summary>
@@ -85,6 +88,7 @@ namespace vMenuClient
                         cleanupVersionChecked = true;
                     }
                 }
+                tmp_kvp_names.Add(k);
             }
             EndFindKvp(tmp_kvp_handle);
 
@@ -93,12 +97,20 @@ namespace vMenuClient
                 SetResourceKvpInt("vmenu_cleanup_version", currentCleanupVersion);
                 foreach (string kvp in tmp_kvp_names)
                 {
-                    if (currentCleanupVersion == 1)
+                    if (currentCleanupVersion == 1 || currentCleanupVersion == 2)
                     {
                         if (!kvp.StartsWith("settings_") && !kvp.StartsWith("vmenu") && !kvp.StartsWith("veh_") && !kvp.StartsWith("ped_") && !kvp.StartsWith("mp_ped_"))
                         {
                             DeleteResourceKvp(kvp);
-                            Debug.WriteLine($"[vMenu] Old unused KVP cleaned up: {kvp}.");
+                            Debug.WriteLine($"[vMenu] [cleanup id: 1] Removed unused (old) KVP: {kvp}.");
+                        }
+                    }
+                    if (currentCleanupVersion == 2)
+                    {
+                        if (kvp.StartsWith("mp_char"))
+                        {
+                            DeleteResourceKvp(kvp);
+                            Debug.WriteLine($"[vMenu] [cleanup id: 2] Removed unused (old) KVP: {kvp}.");
                         }
                     }
                 }
@@ -188,6 +200,14 @@ namespace vMenuClient
                                     {
                                         type = 2;
                                     }
+                                    else if (kvp == "settings_miscLastTimeCycleModifierIndex") // int
+                                    {
+                                        type = 2;
+                                    }
+                                    else if (kvp == "settings_miscLastTimeCycleModifierStrength") // int
+                                    {
+                                        type = 2;
+                                    }
                                 }
                                 else if (kvp == "vmenu_cleanup_version") // int
                                 {
@@ -263,7 +283,16 @@ namespace vMenuClient
             {
                 Tick += OnTick;
             }
-            SetClockDate(DateTime.Now.Day, DateTime.Now.Month, DateTime.Now.Year);
+            try
+            {
+                SetClockDate(DateTime.Now.Day, DateTime.Now.Month, DateTime.Now.Year);
+            }
+            catch (InvalidTimeZoneException timeEx)
+            {
+                Debug.WriteLine($"[vMenu] [Error] Could not set the in-game day, month and year because of an invalid timezone(?).");
+                Debug.WriteLine($"[vMenu] [Error] InvalidTimeZoneException: {timeEx.Message}");
+                Debug.WriteLine($"[vMenu] [Error] vMenu will continue to work normally.");
+            }
         }
 
         #region Set Permissions function
@@ -277,31 +306,32 @@ namespace vMenuClient
 
             VehicleSpawner.allowedCategories = new List<bool>()
             {
-                IsAllowed(Permission.VSCompacts),
-                IsAllowed(Permission.VSSedans),
-                IsAllowed(Permission.VSSUVs),
-                IsAllowed(Permission.VSCoupes),
-                IsAllowed(Permission.VSMuscle),
-                IsAllowed(Permission.VSSportsClassic),
-                IsAllowed(Permission.VSSports),
-                IsAllowed(Permission.VSSuper),
-                IsAllowed(Permission.VSMotorcycles),
-                IsAllowed(Permission.VSOffRoad),
-                IsAllowed(Permission.VSIndustrial),
-                IsAllowed(Permission.VSUtility),
-                IsAllowed(Permission.VSVans),
-                IsAllowed(Permission.VSCycles),
-                IsAllowed(Permission.VSBoats),
-                IsAllowed(Permission.VSHelicopters),
-                IsAllowed(Permission.VSPlanes),
-                IsAllowed(Permission.VSService),
-                IsAllowed(Permission.VSEmergency),
-                IsAllowed(Permission.VSMilitary),
-                IsAllowed(Permission.VSCommercial),
-                IsAllowed(Permission.VSTrains),
+                IsAllowed(Permission.VSCompacts, checkAnyway: true),
+                IsAllowed(Permission.VSSedans, checkAnyway: true),
+                IsAllowed(Permission.VSSUVs, checkAnyway: true),
+                IsAllowed(Permission.VSCoupes, checkAnyway: true),
+                IsAllowed(Permission.VSMuscle, checkAnyway: true),
+                IsAllowed(Permission.VSSportsClassic, checkAnyway: true),
+                IsAllowed(Permission.VSSports, checkAnyway: true),
+                IsAllowed(Permission.VSSuper, checkAnyway: true),
+                IsAllowed(Permission.VSMotorcycles, checkAnyway: true),
+                IsAllowed(Permission.VSOffRoad, checkAnyway: true),
+                IsAllowed(Permission.VSIndustrial, checkAnyway: true),
+                IsAllowed(Permission.VSUtility, checkAnyway: true),
+                IsAllowed(Permission.VSVans, checkAnyway: true),
+                IsAllowed(Permission.VSCycles, checkAnyway: true),
+                IsAllowed(Permission.VSBoats, checkAnyway: true),
+                IsAllowed(Permission.VSHelicopters, checkAnyway: true),
+                IsAllowed(Permission.VSPlanes, checkAnyway: true),
+                IsAllowed(Permission.VSService, checkAnyway: true),
+                IsAllowed(Permission.VSEmergency, checkAnyway: true),
+                IsAllowed(Permission.VSMilitary, checkAnyway: true),
+                IsAllowed(Permission.VSCommercial, checkAnyway: true),
+                IsAllowed(Permission.VSTrains, checkAnyway: true),
             };
+            ArePermissionsSetup = true;
 
-            PermissionsSetupComplete = true;
+            TriggerServerEvent("vMenu:IsResourceUpToDate");
         }
         #endregion
 
@@ -317,6 +347,20 @@ namespace vMenuClient
             if (firstTick)
             {
                 firstTick = false;
+                switch (GetSettingsInt(Setting.vmenu_pvp_mode))
+                {
+                    case 1:
+                        NetworkSetFriendlyFireOption(true);
+                        SetCanAttackFriendly(Game.PlayerPed.Handle, true, false);
+                        break;
+                    case 2:
+                        NetworkSetFriendlyFireOption(false);
+                        SetCanAttackFriendly(Game.PlayerPed.Handle, false, false);
+                        break;
+                    case 0:
+                    default:
+                        break;
+                }
                 // Clear all previous pause menu info/brief messages on resource start.
                 ClearBrief();
 
@@ -339,12 +383,20 @@ namespace vMenuClient
                     {
                         NoClipKey = GetSettingsInt(Setting.vmenu_noclip_toggle_key);
                     }
+
                     // Create the main menu.
                     Menu = new Menu(Game.Player.Name, "Main Menu");
+                    PlayerSubmenu = new Menu(Game.Player.Name, "Player Related Options");
+                    VehicleSubmenu = new Menu(Game.Player.Name, "Vehicle Related Options");
+                    WorldSubmenu = new Menu(Game.Player.Name, "World Options");
 
                     // Add the main menu to the menu pool.
                     MenuController.AddMenu(Menu);
                     MenuController.MainMenu = Menu;
+
+                    MenuController.AddSubmenu(Menu, PlayerSubmenu);
+                    MenuController.AddSubmenu(Menu, VehicleSubmenu);
+                    MenuController.AddSubmenu(Menu, WorldSubmenu);
 
                     // Create all (sub)menus.
                     CreateSubmenus();
@@ -359,20 +411,19 @@ namespace vMenuClient
 
                 // Manage Stamina
                 if (PlayerOptionsMenu != null && PlayerOptionsMenu.PlayerStamina && IsAllowed(Permission.POUnlimitedStamina))
-                {
                     StatSetInt((uint)GetHashKey("MP0_STAMINA"), 100, true);
-                }
                 else
-                {
                     StatSetInt((uint)GetHashKey("MP0_STAMINA"), 0, true);
-                }
-                // Manage other stats.
-                StatSetInt((uint)GetHashKey("MP0_STRENGTH"), 100, true);
-                StatSetInt((uint)GetHashKey("MP0_LUNG_CAPACITY"), 80, true); // reduced because it was over powered
-                StatSetInt((uint)GetHashKey("MP0_WHEELIE_ABILITY"), 100, true);
-                StatSetInt((uint)GetHashKey("MP0_FLYING_ABILITY"), 100, true);
-                StatSetInt((uint)GetHashKey("MP0_SHOOTING_ABILITY"), 50, true); // reduced because it was over powered
-                StatSetInt((uint)GetHashKey("MP0_STEALTH_ABILITY"), 100, true);
+
+                // Manage other stats, in order of appearance in the pause menu (stats) page.
+                StatSetInt((uint)GetHashKey("MP0_SHOOTING_ABILITY"), 100, true);        // Shooting
+                StatSetInt((uint)GetHashKey("MP0_STRENGTH"), 100, true);                // Strength
+                StatSetInt((uint)GetHashKey("MP0_STEALTH_ABILITY"), 100, true);         // Stealth
+                StatSetInt((uint)GetHashKey("MP0_FLYING_ABILITY"), 100, true);          // Flying
+                StatSetInt((uint)GetHashKey("MP0_WHEELIE_ABILITY"), 100, true);         // Driving
+                StatSetInt((uint)GetHashKey("MP0_LUNG_CAPACITY"), 100, true);           // Lung Capacity
+                StatSetFloat((uint)GetHashKey("MP0_PLAYER_MENTAL_STATE"), 0f, true);    // Mental State
+
             }
             #endregion
 
@@ -425,52 +476,32 @@ namespace vMenuClient
 
                 if (Game.CurrentInputMode == InputMode.MouseAndKeyboard)
                 {
-                    if (!MenuController.IsAnyMenuOpen() || NoClipEnabled)
+                    if (Game.IsControlJustPressed(0, (Control)NoClipKey) && IsAllowed(Permission.NoClip) && UpdateOnscreenKeyboard() != 0)
                     {
-                        if (Game.IsControlJustPressed(0, (Control)NoClipKey) && IsAllowed(Permission.NoClip))
+                        if (Game.PlayerPed.IsInVehicle())
                         {
-                            if (MenuController.IsAnyMenuOpen())
+                            Vehicle veh = GetVehicle();
+                            if (veh != null && veh.Exists() && veh.Driver == Game.PlayerPed)
                             {
-                                if (MenuController.GetCurrentMenu() != null && MenuController.GetCurrentMenu() != NoClipMenu)
-                                {
-                                    MenuController.CloseAllMenus();
-                                }
-                            }
-                            if (Game.PlayerPed.IsInVehicle())
-                            {
-                                Vehicle veh = GetVehicle();
-                                if (veh != null && veh.Exists() && !veh.IsDead && veh.Driver == Game.PlayerPed)
-                                {
-                                    NoClipEnabled = !NoClipEnabled;
-                                    MenuController.DontOpenAnyMenu = NoClipEnabled;
-                                }
-                                else
-                                {
-                                    NoClipEnabled = false;
-                                    MenuController.DontOpenAnyMenu = NoClipEnabled;
-                                    Notify.Error("You need to be the driver of this vehicle to enable noclip!");
-                                }
+                                NoClipEnabled = !NoClipEnabled;
                             }
                             else
                             {
-                                NoClipEnabled = !NoClipEnabled;
-                                MenuController.DontOpenAnyMenu = NoClipEnabled;
+                                NoClipEnabled = false;
+                                Notify.Error("This vehicle does not exist (somehow) or you need to be the driver of this vehicle to enable noclip!");
                             }
                         }
+                        else
+                        {
+                            NoClipEnabled = !NoClipEnabled;
+                        }
                     }
-                }
-
-                if (NoClipEnabled)
-                {
-                    MenuController.DontOpenAnyMenu = true;
                 }
 
                 #endregion
 
                 // Menu toggle button.
                 Game.DisableControlThisFrame(0, MenuToggleKey);
-
-
             }
         }
 
@@ -481,16 +512,15 @@ namespace vMenuClient
         /// </summary>
         /// <param name="submenu"></param>
         /// <param name="menuButton"></param>
-        private void AddMenu(Menu submenu, MenuItem menuButton)
+        private void AddMenu(Menu parentMenu, Menu submenu, MenuItem menuButton)
         {
-            Menu.AddMenuItem(menuButton);
-            MenuController.AddSubmenu(Menu, submenu);
-            MenuController.BindMenuItem(Menu, submenu, menuButton);
-            //Mp.Add(submenu);
+            parentMenu.AddMenuItem(menuButton);
+            MenuController.AddSubmenu(parentMenu, submenu);
+            MenuController.BindMenuItem(parentMenu, submenu, menuButton);
             submenu.RefreshIndex();
-            //submenu.UpdateScaleform();
         }
         #endregion
+
         #region Create Submenus
         /// <summary>
         /// Creates all the submenus depending on the permissions of the user.
@@ -506,14 +536,13 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(Menu, menu, button);
                 Menu.OnItemSelect += (sender, item, index) =>
                 {
                     if (item == button)
                     {
                         OnlinePlayersMenu.UpdatePlayerlist();
                         menu.RefreshIndex();
-                        //menu.UpdateScaleform();
                     }
                 };
             }
@@ -525,17 +554,19 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(Menu, menu, button);
                 Menu.OnItemSelect += (sender, item, index) =>
                 {
                     if (item == button)
                     {
                         TriggerServerEvent("vMenu:RequestBanList", Game.Player.Handle);
                         menu.RefreshIndex();
-                        //menu.UpdateScaleform();
                     }
                 };
             }
+
+            MenuItem playerSubmenuBtn = new MenuItem("Player Related Options", "Open this submenu for player related subcategories.") { Label = "→→→" };
+            Menu.AddMenuItem(playerSubmenuBtn);
 
             // Add the player options menu.
             if (IsAllowed(Permission.POMenu))
@@ -546,9 +577,11 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(PlayerSubmenu, menu, button);
             }
 
+            MenuItem vehicleSubmenuBtn = new MenuItem("Vehicle Related Options", "Open this submenu for vehicle related subcategories.") { Label = "→→→" };
+            Menu.AddMenuItem(vehicleSubmenuBtn);
             // Add the vehicle options Menu.
             if (IsAllowed(Permission.VOMenu))
             {
@@ -558,10 +591,9 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(VehicleSubmenu, menu, button);
             }
 
-            var vl = new Vehicles().VehicleClasses;
             // Add the vehicle spawner menu.
             if (IsAllowed(Permission.VSMenu))
             {
@@ -571,7 +603,7 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(VehicleSubmenu, menu, button);
             }
 
             // Add Saved Vehicles menu.
@@ -583,14 +615,26 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
-                Menu.OnItemSelect += (sender, item, index) =>
+                AddMenu(VehicleSubmenu, menu, button);
+                VehicleSubmenu.OnItemSelect += (sender, item, index) =>
                 {
                     if (item == button)
                     {
                         SavedVehiclesMenu.UpdateMenuAvailableCategories();
                     }
                 };
+            }
+
+            // Add the Personal Vehicle menu.
+            if (IsAllowed(Permission.PVMenu))
+            {
+                PersonalVehicleMenu = new PersonalVehicle();
+                Menu menu = PersonalVehicleMenu.GetMenu();
+                MenuItem button = new MenuItem("Personal Vehicle", "Set a vehicle as your personal vehicle, and control some things about that vehicle when you're not inside.")
+                {
+                    Label = "→→→"
+                };
+                AddMenu(VehicleSubmenu, menu, button);
             }
 
             // Add the player appearance menu.
@@ -602,7 +646,7 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(PlayerSubmenu, menu, button);
 
                 MpPedCustomizationMenu = new MpPedCustomization();
                 Menu menu2 = MpPedCustomizationMenu.GetMenu();
@@ -610,10 +654,11 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu2, button2);
-
-
+                AddMenu(PlayerSubmenu, menu2, button2);
             }
+
+            MenuItem worldSubmenuBtn = new MenuItem("World Related Options", "Open this submenu for world related subcategories.") { Label = "→→→" };
+            Menu.AddMenuItem(worldSubmenuBtn);
 
             // Add the time options menu.
             // check for 'not true' to make sure that it _ONLY_ gets disabled if the owner _REALLY_ wants it disabled, not if they accidentally spelled "false" wrong or whatever.
@@ -625,7 +670,7 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(WorldSubmenu, menu, button);
             }
 
             // Add the weather options menu.
@@ -638,7 +683,7 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(WorldSubmenu, menu, button);
             }
 
             // Add the weapons menu.
@@ -650,7 +695,7 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(PlayerSubmenu, menu, button);
             }
 
             // Add Weapon Loadouts menu.
@@ -662,7 +707,20 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(PlayerSubmenu, menu, button);
+            }
+
+            if (IsAllowed(Permission.NoClip))
+            {
+                MenuItem toggleNoclip = new MenuItem("Toggle NoClip", "Toggle NoClip on or off.");
+                PlayerSubmenu.AddMenuItem(toggleNoclip);
+                PlayerSubmenu.OnItemSelect += (sender, item, index) =>
+                {
+                    if (item == toggleNoclip)
+                    {
+                        NoClipEnabled = !NoClipEnabled;
+                    }
+                };
             }
 
             // Add Voice Chat Menu.
@@ -674,7 +732,7 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(Menu, menu, button);
             }
 
             {
@@ -684,14 +742,10 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(Menu, menu, button);
             }
 
             // Add misc settings menu.
-            //if (CommonFunctions.IsAllowed(Permission.MSMenu))
-            // removed the permissions check, because the misc menu should've never been restricted in the first place.
-            // not sure why I even added this before... saving of preferences and similar functions should always be allowed.
-            // no matter what.
             {
                 MiscSettingsMenu = new MiscSettings();
                 Menu menu = MiscSettingsMenu.GetMenu();
@@ -699,7 +753,7 @@ namespace vMenuClient
                 {
                     Label = "→→→"
                 };
-                AddMenu(menu, button);
+                AddMenu(Menu, menu, button);
             }
 
             // Add About Menu.
@@ -709,7 +763,7 @@ namespace vMenuClient
             {
                 Label = "→→→"
             };
-            AddMenu(sub, btn);
+            AddMenu(Menu, sub, btn);
 
             // Refresh everything.
             MenuController.Menus.ForEach((m) => m.RefreshIndex());
@@ -717,6 +771,38 @@ namespace vMenuClient
             if (!GetSettingsBool(Setting.vmenu_use_permissions))
             {
                 Notify.Alert("vMenu is set up to ignore permissions, default permissions will be used.");
+            }
+
+            if (PlayerSubmenu.Size > 0)
+            {
+                MenuController.BindMenuItem(Menu, PlayerSubmenu, playerSubmenuBtn);
+            }
+            else
+            {
+                Menu.RemoveMenuItem(playerSubmenuBtn);
+            }
+
+            if (VehicleSubmenu.Size > 0)
+            {
+                MenuController.BindMenuItem(Menu, VehicleSubmenu, vehicleSubmenuBtn);
+            }
+            else
+            {
+                Menu.RemoveMenuItem(vehicleSubmenuBtn);
+            }
+
+            if (WorldSubmenu.Size > 0)
+            {
+                MenuController.BindMenuItem(Menu, WorldSubmenu, worldSubmenuBtn);
+            }
+            else
+            {
+                Menu.RemoveMenuItem(worldSubmenuBtn);
+            }
+
+            if (MiscSettingsMenu != null)
+            {
+                MenuController.EnableMenuToggleKeyOnController = !MiscSettingsMenu.MiscDisableControllerSupport;
             }
         }
         #endregion

@@ -55,7 +55,6 @@ namespace vMenuClient
                 }
             };
 
-
             for (int i = 0; i < 22; i++)
             {
                 Menu categoryMenu = new Menu("Saved Vehicles", GetLabelText($"VEH_CLASS_{i}"));
@@ -78,9 +77,10 @@ namespace vMenuClient
                 };
             }
 
-            MenuItem unavailableModels = new MenuItem("Unavailable Saved Vehicles", "These vehicles are currently unavailable because the models are not present in the game. These vehicles are most likely not being streamed from the server.");
-
-            unavailableModels.Label = "→→→";
+            MenuItem unavailableModels = new MenuItem("Unavailable Saved Vehicles", "These vehicles are currently unavailable because the models are not present in the game. These vehicles are most likely not being streamed from the server.")
+            {
+                Label = "→→→"
+            };
 
             menu.AddMenuItem(unavailableModels);
             MenuController.BindMenuItem(menu, unavailableVehiclesMenu, unavailableModels);
@@ -96,6 +96,11 @@ namespace vMenuClient
             selectedVehicleMenu.AddMenuItem(renameVehicle);
             selectedVehicleMenu.AddMenuItem(replaceVehicle);
             selectedVehicleMenu.AddMenuItem(deleteVehicle);
+
+            selectedVehicleMenu.OnMenuOpen += (sender) =>
+            {
+                spawnVehicle.Label = "(" + GetDisplayNameFromVehicleModel(currentlySelectedVehicle.Value.model).ToLower() + ")";
+            };
 
             selectedVehicleMenu.OnMenuClose += (sender) =>
             {
@@ -181,6 +186,58 @@ namespace vMenuClient
                     deleteVehicle.Label = "";
                 }
             };
+            unavailableVehiclesMenu.InstructionalButtons.Add(Control.FrontendDelete, "Delete Vehicle!");
+
+            unavailableVehiclesMenu.ButtonPressHandlers.Add(new Menu.ButtonPressHandler(Control.FrontendDelete, Menu.ControlPressCheckType.JUST_RELEASED, new Action<Menu, Control>((m, c) =>
+            {
+                if (m.Size > 0)
+                {
+                    int index = m.CurrentIndex;
+                    if (index < m.Size)
+                    {
+                        MenuItem item = m.GetMenuItems().Find(i => i.Index == index);
+                        if (item != null && (item.ItemData is KeyValuePair<string, VehicleInfo> sd))
+                        {
+                            if (item.Label == "~r~Are you sure?")
+                            {
+                                Log("Unavailable saved vehicle deleted, data: " + JsonConvert.SerializeObject(sd));
+                                DeleteResourceKvp(sd.Key);
+                                unavailableVehiclesMenu.GoBack();
+                                UpdateMenuAvailableCategories();
+                            }
+                            else
+                            {
+                                item.Label = "~r~Are you sure?";
+                            }
+                        }
+                        else
+                        {
+                            Notify.Error("Somehow this vehicle could not be found.");
+                        }
+                    }
+                    else
+                    {
+                        Notify.Error("You somehow managed to trigger deletion of a menu item that doesn't exist, how...?");
+                    }
+                }
+                else
+                {
+                    Notify.Error("There are currrently no unavailable vehicles to delete!");
+                }
+            }), true));
+
+            void ResetAreYouSure()
+            {
+                foreach (var i in unavailableVehiclesMenu.GetMenuItems())
+                {
+                    if (i.ItemData is KeyValuePair<string, VehicleInfo> vd)
+                    {
+                        i.Label = $"({vd.Value.name})";
+                    }
+                }
+            }
+            unavailableVehiclesMenu.OnMenuClose += (sender) => ResetAreYouSure();
+            unavailableVehiclesMenu.OnIndexChange += (sender, oldItem, newItem, oldIndex, newIndex) => ResetAreYouSure();
 
             #endregion
         }
@@ -269,18 +326,24 @@ namespace vMenuClient
                     int vclass = GetVehicleClassFromName(sv.Value.model);
                     Menu menu = subMenus[vclass];
 
-                    MenuItem savedVehicleBtn = new MenuItem(sv.Key.Substring(4), $"Manage this saved vehicle.");
-                    savedVehicleBtn.Label = $"({sv.Value.name}) →→→";
+                    MenuItem savedVehicleBtn = new MenuItem(sv.Key.Substring(4), $"Manage this saved vehicle.")
+                    {
+                        Label = $"({sv.Value.name}) →→→"
+                    };
                     menu.AddMenuItem(savedVehicleBtn);
 
                     svMenuItems.Add(savedVehicleBtn, sv);
                 }
                 else
                 {
-                    MenuItem missingVehItem = new MenuItem(sv.Key.Substring(4), "This model could not be found in the game files. Most likely because this is an addon vehicle and it's currently not streamed by the server.");
-                    missingVehItem.Label = "(" + sv.Value.name + ")";
-                    missingVehItem.Enabled = false;
-                    missingVehItem.LeftIcon = MenuItem.Icon.LOCK;
+                    MenuItem missingVehItem = new MenuItem(sv.Key.Substring(4), "This model could not be found in the game files. Most likely because this is an addon vehicle and it's currently not streamed by the server.")
+                    {
+                        Label = "(" + sv.Value.name + ")",
+                        Enabled = false,
+                        LeftIcon = MenuItem.Icon.LOCK,
+                        ItemData = sv
+                    };
+                    //SetResourceKvp(sv.Key + "_tmp_dupe", JsonConvert.SerializeObject(sv.Value));
                     unavailableVehiclesMenu.AddMenuItem(missingVehItem);
                 }
             }

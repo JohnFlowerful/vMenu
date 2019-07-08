@@ -198,6 +198,26 @@ namespace vMenuClient
         {
             Custom("~g~~h~Success~h~~s~: " + message, blink, saveToBrief);
         }
+
+        /// <summary>
+        /// Shows a custom notification with an image attached.
+        /// </summary>
+        /// <param name="textureDict"></param>
+        /// <param name="textureName"></param>
+        /// <param name="message"></param>
+        /// <param name="title"></param>
+        /// <param name="subtitle"></param>
+        /// <param name="safeToBrief"></param>
+        public static void CustomImage(string textureDict, string textureName, string message, string title, string subtitle, bool saveToBrief, int iconType = 0)
+        {
+            SetNotificationTextEntry("CELL_EMAIL_BCON"); // 10x ~a~
+            foreach (string s in CitizenFX.Core.UI.Screen.StringToArray(message))
+            {
+                AddTextComponentSubstringPlayerName(s);
+            }
+            SetNotificationMessage(textureName, textureDict, false, iconType, title, subtitle);
+            DrawNotification(false, saveToBrief);
+        }
     }
     #endregion
 
@@ -276,6 +296,20 @@ namespace vMenuClient
 
     public static class HelpMessage
     {
+
+
+        public enum Label
+        {
+            EXIT_INTERIOR_HELP_MESSAGE
+        }
+
+        private static Dictionary<Label, KeyValuePair<string, string>> labels = new Dictionary<Label, KeyValuePair<string, string>>()
+        {
+            [Label.EXIT_INTERIOR_HELP_MESSAGE] = new KeyValuePair<string, string>("EXIT_INTERIOR_HELP_MESSAGE", "Press ~INPUT_CONTEXT~ to exit the building.")
+        };
+
+
+
         public static void Custom(string message) => Custom(message, 6000, true);
         public static void Custom(string message, int duration) => Custom(message, duration, true);
         public static void Custom(string message, int duration, bool sound)
@@ -291,6 +325,26 @@ namespace vMenuClient
                 AddTextComponentSubstringPlayerName(s);
             }
             EndTextCommandDisplayHelp(0, false, sound, duration);
+        }
+
+        public static void CustomLooped(Label label)
+        {
+            if (GetLabelText(labels[label].Key) == "NULL")
+            {
+                AddTextEntry(labels[label].Key, labels[label].Value);
+            }
+            //string[] array = CommonFunctions.StringToArray(message);
+            //if (IsHelpMessageBeingDisplayed())
+            //{
+            //    ClearAllHelpMessages();
+            //}
+            //BeginTextCommandDisplayHelp("CELL_EMAIL_BCON");
+            //foreach (string s in array)
+            //{
+            //    AddTextComponentSubstringPlayerName(s);
+            //}
+            DisplayHelpTextThisFrame(labels[label].Key, true);
+            //EndTextCommandDisplayHelp(0, true, false, -1);
         }
     }
 }

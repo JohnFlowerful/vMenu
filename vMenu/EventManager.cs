@@ -17,6 +17,7 @@ namespace vMenuClient
     public class EventManager : BaseScript
     {
         // common functions.
+        public static bool CurrentlySwitchingWeather { get; private set; } = false;
         public static string currentWeatherType = GetSettingsString(Setting.vmenu_default_weather);
         public static bool blackoutMode = false;
         public static bool dynamicWeather = GetSettingsBool(Setting.vmenu_enable_dynamic_weather);
@@ -26,6 +27,10 @@ namespace vMenuClient
         public static bool freezeTime = GetSettingsBool(Setting.vmenu_freeze_time);
         private int minuteTimer = GetGameTimer();
         private int minuteClockSpeed = 2000;
+        private static bool DontDoTimeSyncRightNow = false;
+        private static bool SmoothTimeTransitionsEnabled => GetSettingsBool(Setting.vmenu_smooth_time_transitions);
+        private int currentServerHours = currentHours;
+        private int currentServerMinutes = currentMinutes;
 
         /// <summary>
         /// Constructor.
@@ -34,7 +39,6 @@ namespace vMenuClient
         {
             // Add event handlers.
             // Handle the SetPermissions event.
-            //EventHandlers.Add("vMenu:ConfigureClient", new Action<dynamic, dynamic, dynamic, dynamic>(ConfigureClient));
             EventHandlers.Add("vMenu:SetAddons", new Action(SetAddons));
             EventHandlers.Add("vMenu:SetPermissions", new Action<string>(MainMenu.SetPermissions));
             EventHandlers.Add("vMenu:GoToPlayer", new Action<string>(SummonPlayer));
@@ -45,10 +49,13 @@ namespace vMenuClient
             EventHandlers.Add("vMenu:SetTime", new Action<int, int, bool>(SetTime));
             EventHandlers.Add("vMenu:GoodBye", new Action(GoodBye));
             EventHandlers.Add("vMenu:SetBanList", new Action<string>(UpdateBanList));
-            EventHandlers.Add("vMenu:OutdatedResource", new Action(NotifyOutdatedVersion));
+            EventHandlers.Add("vMenu:OutdatedResource", new Action<string>(NotifyOutdatedVersion));
             EventHandlers.Add("vMenu:ClearArea", new Action<float, float, float>(ClearAreaNearPos));
             EventHandlers.Add("vMenu:updatePedDecors", new Action(UpdatePedDecors));
             EventHandlers.Add("playerSpawned", new Action(SetAppearanceOnFirstSpawn));
+            EventHandlers.Add("vMenu:GetOutOfCar", new Action<int, int>(GetOutOfCar));
+            EventHandlers.Add("vMenu:PrivateMessage", new Action<string, string>(PrivateMessage));
+            EventHandlers.Add("vMenu:UpdateTeleportLocations", new Action<string>(UpdateTeleportLocations));
             Tick += WeatherSync;
             Tick += TimeSync;
         }
@@ -72,11 +79,19 @@ namespace vMenuClient
                 }
                 if (MainMenu.WeaponLoadoutsMenu != null && MainMenu.WeaponLoadoutsMenu.WeaponLoadoutsSetLoadoutOnRespawn && IsAllowed(Permission.WLEquipOnRespawn))
                 {
-                    await SpawnWeaponLoadoutAsync("vmenu_temp_weapons_loadout_before_respawn", true);
+                    var saveName = GetResourceKvpString("vmenu_string_default_loadout");
+                    if (!string.IsNullOrEmpty(saveName))
+                    {
+                        await SpawnWeaponLoadoutAsync(saveName, true, false, true);
+                    }
+
                 }
             }
         }
 
+        /// <summary>
+        /// Sets the addon models from the addons.json file.
+        /// </summary>
         private void SetAddons()
         {
             // reset addons
@@ -95,7 +110,10 @@ namespace vMenuClient
                 {
                     foreach (string addon in addons["vehicles"])
                     {
-                        VehicleSpawner.AddonVehicles.Add(addon, (uint)GetHashKey(addon));
+                        if (!VehicleSpawner.AddonVehicles.ContainsKey(addon))
+                            VehicleSpawner.AddonVehicles.Add(addon, (uint)GetHashKey(addon));
+                        else
+                            Debug.WriteLine($"[vMenu] [Error] Your addons.json file contains 2 or more entries with the same vehicle name! ({addon}) Please remove duplicate lines!");
                     }
                 }
 
@@ -104,7 +122,10 @@ namespace vMenuClient
                 {
                     foreach (string addon in addons["weapons"])
                     {
-                        WeaponOptions.AddonWeapons.Add(addon, (uint)GetHashKey(addon));
+                        if (!WeaponOptions.AddonWeapons.ContainsKey(addon))
+                            WeaponOptions.AddonWeapons.Add(addon, (uint)GetHashKey(addon));
+                        else
+                            Debug.WriteLine($"[vMenu] [Error] Your addons.json file contains 2 or more entries with the same weapon name! ({addon}) Please remove duplicate lines!");
                     }
                 }
 
@@ -113,7 +134,10 @@ namespace vMenuClient
                 {
                     foreach (string addon in addons["peds"])
                     {
-                        PlayerAppearance.AddonPeds.Add(addon, (uint)GetHashKey(addon));
+                        if (!PlayerAppearance.AddonPeds.ContainsKey(addon))
+                            PlayerAppearance.AddonPeds.Add(addon, (uint)GetHashKey(addon));
+                        else
+                            Debug.WriteLine($"[vMenu] [Error] Your addons.json file contains 2 or more entries with the same ped name! ({addon}) Please remove duplicate lines!");
                     }
                 }
             }
@@ -122,8 +146,8 @@ namespace vMenuClient
                 Debug.WriteLine($"\n\n^1[vMenu] [ERROR] ^7Your addons.json file contains a problem! Error details: {ex.Message}\n\n");
             }
 
-            FunctionsController.flaresAllowed = false;
-            FunctionsController.bombsAllowed = false;
+            //FunctionsController.flaresAllowed = false;
+            //FunctionsController.bombsAllowed = false;
 
             currentHours = GetSettingsInt(Setting.vmenu_default_time_hour);
             currentHours = (currentHours >= 0 && currentHours < 24) ? currentHours : 9;
@@ -141,15 +165,18 @@ namespace vMenuClient
         /// <summary>
         /// Notifies the player that the current version of vMenu is outdated.
         /// </summary>
-        private async void NotifyOutdatedVersion()
+        private async void NotifyOutdatedVersion(string message)
         {
-            Debug.Write("\n\n\n\n[vMenu] vMenu is outdated, please update asap.\n\n\n\n");
-            await Delay(5000);
-            Log("Sending alert now.");
-            if (GetSettingsBool(Setting.vmenu_outdated_version_notify_players))
+            Debug.WriteLine("\n\n\n\n[vMenu] [WARNING] vMenu is outdated, please update as soon as possible. Update info:\n" + message + "\n\n\n\n");
+            while (IsHudHidden() || !IsHudPreferenceSwitchedOn() || !IsScreenFadedIn() || IsPlayerSwitchInProgress())
             {
-                Notify.Alert("vMenu is outdated, if you are the server administrator, please update vMenu as soon as possible.", true, true);
+                await Delay(0);
             }
+
+            Log("Sending alert now after the hud is confirmed to be enabled.");
+
+            Notify.Error("vMenu is outdated. Please update as soon as possible!", true, true);
+            Notify.Custom(message, true, true);
         }
 
         /// <summary>
@@ -171,6 +198,9 @@ namespace vMenuClient
             ForceSocialClubUpdate();
         }
 
+        /// <summary>
+        /// Loads/unloads the snow fx particles if needed.
+        /// </summary>
         private async void UpdateWeatherParticlesOnce()
         {
             if (currentWeatherType.ToUpper() == "XMAS")
@@ -195,6 +225,7 @@ namespace vMenuClient
             }
         }
 
+
         /// <summary>
         /// OnTick loop to keep the weather synced.
         /// </summary>
@@ -211,29 +242,52 @@ namespace vMenuClient
                 if (currentWeatherType != lastWeather)
                 {
                     Log($"Start changing weather type.\nOld weather: {lastWeather}.\nNew weather type: {currentWeatherType}.\nBlackout? {blackoutMode}.\nThis change will take 45.5 seconds!");
-
+                    CurrentlySwitchingWeather = true;
                     ClearWeatherTypePersist();
                     ClearOverrideWeather();
                     SetWeatherTypeNow(lastWeather);
+                    var previousWeather = lastWeather;
                     lastWeather = currentWeatherType;
-                    SetWeatherTypeOverTime(currentWeatherType, 45f);
+                    SetWeatherTypeOverTime(currentWeatherType, 30f);
                     int tmpTimer = GetGameTimer();
-                    while (GetGameTimer() - tmpTimer < 45500) // wait 45.5 _real_ seconds
+
+                    // Wait until the transition is completed.
+                    while (GetGameTimer() - tmpTimer < 30000) // wait 30 _real_ seconds
                     {
-                        await Delay(0);
+                        // To update the current state in the menu subtitle counter pre-text.
+                        float weatherChangeState = ((float)GetGameTimer() - (float)tmpTimer) / 30000f;
+
+                        if (MainMenu.WeatherOptionsMenu != null)
+                        {
+                            MainMenu.WeatherOptionsMenu.GetMenu().CounterPreText = $"(Cooldown {Math.Ceiling(30f - (30f * weatherChangeState))}) ";
+                        }
+                        await Delay(100);
                     }
+
+                    // Reset the intensity to make the game handle the intensity correctly.
+                    SetRainFxIntensity(-1f);
+
+                    // Set the new weather type to be persistent.
                     SetWeatherTypeNow(currentWeatherType);
                     justChanged = true;
+
+                    // Dbg logging
                     Log("done changing weather type (duration: 45.5 seconds)");
+
+                    // Stop currently switching weather type checks.
+                    CurrentlySwitchingWeather = false;
+
+                    // Reset the menu subtitle counter pre-text.
+                    if (MainMenu.WeatherOptionsMenu != null)
+                        MainMenu.WeatherOptionsMenu.GetMenu().CounterPreText = null;
+
+                    TriggerEvent("vMenu:WeatherChangeComplete", previousWeather, currentWeatherType);
                 }
                 if (!justChanged)
                 {
                     SetWeatherTypeNowPersist(currentWeatherType);
                 }
                 SetBlackout(blackoutMode);
-                SetWind(0f);
-                SetWindDirection(0f);
-                SetWindSpeed(0f);
             }
         }
 
@@ -246,6 +300,7 @@ namespace vMenuClient
             // Check if the time sync should be disabled.
             if (GetSettingsBool(Setting.vmenu_enable_time_sync))
             {
+
                 // If time is frozen...
                 if (freezeTime)
                 {
@@ -282,7 +337,6 @@ namespace vMenuClient
                     }
                     NetworkOverrideClockTime(currentHours, currentMinutes, 0);
                 }
-
             }
         }
 
@@ -327,11 +381,52 @@ namespace vMenuClient
         /// <param name="newHours"></param>
         /// <param name="newMinutes"></param>
         /// <param name="freezeTime"></param>
-        private void SetTime(int newHours, int newMinutes, bool freezeTime)
+        private async void SetTime(int newHours, int newMinutes, bool freezeTime)
         {
+            currentServerHours = newHours;
+            currentServerMinutes = newMinutes;
+
+            bool IsTimeDifferenceTooSmall()
+            {
+                var totalDifference = 0;
+                totalDifference += (newHours - currentHours) * 60;
+                totalDifference += (newMinutes - currentMinutes);
+
+                if (totalDifference < 15 && totalDifference > -120)
+                    return true;
+
+                return false;
+            }
+
             EventManager.freezeTime = freezeTime;
-            currentMinutes = newMinutes;
-            currentHours = newHours;
+
+            if (SmoothTimeTransitionsEnabled && !IsTimeDifferenceTooSmall())
+            {
+                if (!DontDoTimeSyncRightNow)
+                {
+                    DontDoTimeSyncRightNow = true;
+                    EventManager.freezeTime = false;
+
+                    var oldSpeed = minuteClockSpeed;
+
+                    while (currentHours != currentServerHours || currentMinutes != currentServerMinutes)
+                    {
+                        EventManager.freezeTime = false;
+                        await Delay(0);
+                        minuteClockSpeed = 1;
+                    }
+                    EventManager.freezeTime = freezeTime;
+
+                    minuteClockSpeed = oldSpeed;
+
+                    DontDoTimeSyncRightNow = false;
+                }
+            }
+            else
+            {
+                currentHours = currentServerHours;
+                currentMinutes = currentServerMinutes;
+            }
         }
 
         /// <summary>
@@ -373,6 +468,64 @@ namespace vMenuClient
             ClearAreaOfEverything(x, y, z, 100f, false, false, false, false);
         }
 
+        /// <summary>
+        /// Kicks the current player from the specified vehicle if they're inside and don't own the vehicle themselves.
+        /// </summary>
+        /// <param name="vehNetId"></param>
+        /// <param name="vehicleOwnedBy"></param>
+        private async void GetOutOfCar(int vehNetId, int vehicleOwnedBy)
+        {
+            if (NetworkDoesNetworkIdExist(vehNetId))
+            {
+                int veh = NetToVeh(vehNetId);
+                if (DoesEntityExist(veh))
+                {
+                    Vehicle vehicle = new Vehicle(veh);
+
+                    if (vehicle == null || !vehicle.Exists())
+                        return;
+
+                    if (Game.PlayerPed.IsInVehicle(vehicle) && vehicleOwnedBy != Game.Player.ServerId)
+                    {
+                        if (!vehicle.IsStopped)
+                        {
+                            Notify.Alert("The owner of this vehicle is reclaiming their personal vehicle. You will be kicked from this vehicle in about 10 seconds. Stop the vehicle now to avoid taking damage.", false, true);
+                        }
+
+                        // Wait for the vehicle to come to a stop, or 10 seconds, whichever is faster.
+                        var timer = GetGameTimer();
+                        while (vehicle != null && vehicle.Exists() && !vehicle.IsStopped)
+                        {
+                            await Delay(0);
+                            if (GetGameTimer() - timer > (10 * 1000)) // 10 second timeout
+                            {
+                                break;
+                            }
+                        }
+
+                        // just to make sure they're actually still inside the vehicle and the vehicle still exists.
+                        if (vehicle != null && vehicle.Exists() && Game.PlayerPed.IsInVehicle(vehicle))
+                        {
+                            // Make the ped jump out because the car isn't stopped yet.
+                            if (!vehicle.IsStopped)
+                            {
+                                Notify.Info("You were warned, now you'll have to suffer the consequences!");
+                                TaskLeaveVehicle(Game.PlayerPed.Handle, vehicle.Handle, 4160);
+                            }
+                            // Make the ped exit gently.
+                            else
+                            {
+                                TaskLeaveVehicle(Game.PlayerPed.Handle, vehicle.Handle, 0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Updates ped decorators for the clothing animation when players have joined.
+        /// </summary>
         private async void UpdatePedDecors()
         {
             await Delay(1000);
@@ -380,6 +533,15 @@ namespace vMenuClient
             PlayerAppearance.ClothingAnimationType = -1;
             await Delay(100);
             PlayerAppearance.ClothingAnimationType = backup;
+        }
+
+        /// <summary>
+        /// Updates the teleports locations data from the server side locations.json, because that doesn't update client side on change.
+        /// </summary>
+        /// <param name="jsonData"></param>
+        private void UpdateTeleportLocations(string jsonData)
+        {
+            MiscSettings.TpLocations = JsonConvert.DeserializeObject<List<vMenuShared.ConfigManager.TeleportLocation>>(jsonData);
         }
     }
 }
